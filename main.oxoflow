@@ -1,0 +1,234 @@
+# tcga-mixcr.oxoflow — Phase 4: per-sample immune repertoire profiling.
+# Lives at the PROJECT ROOT (oxo-flow resolves relative paths against this file).
+#
+# Per sample (sample domain from [workflow] metadata_file + [[sample_groups]]):
+#   mixcr        : MiXCR rna-seq preset DIRECTLY on BAM (needs MI_LICENSE via
+#                  shell_prelude). Chimeric BAM merged first when present.
+#                  (GDC BAMs lack 0x40/0x80 READ1/READ2 flags, so a FASTQ
+#                  intermediate via `samtools fastq` is NOT viable — MiXCR's
+#                  own BAM reader pairs by QNAME instead. Verified 2026-11-14.)
+#   trust4       : TRUST4 de novo directly on BAM(s) (independent branch, parallel)
+#   standardize  : normalize both tools to the unified clonotype schema
+#
+# Long-term artifacts: .clones.tsv / .report.json / _cdr3.out / _report.tsv /
+# .unified.tsv under results/{cancer}/{barcode_12}/{sample}/. Intermediates
+# (.vdjca/.clna, merged tmp BAMs) live under tmp/ or the results sample dir.
+#
+# Gates: oxo-flow validate|dry-run|lint tcga-mixcr.oxoflow
+# Run:   oxo-flow run tcga-mixcr.oxoflow -j 2 --provenance
+
+[workflow]
+name = "tcga-mixcr"
+version = "0.1.0"
+description = "TCGA RNA-seq TCR/BCR profiling with MiXCR + TRUST4"
+author = "Shixiang Wang (wangshx@csu.edu.cn)"
+metadata_file = "manifests/test_samples_metadata.tsv"
+
+[[sample_groups]]
+name = "test"
+samples = [
+  "643bb711-7302-4ba7-bd39-cb0e4d9c2377",
+  "f2ab4258-222d-4a08-a805-3628048ebf1c",
+  "74e2edb8-5d55-48b2-a24d-2d76db8a04bd",
+  "a563979a-36fe-4faf-97de-ecd02e5e342c",
+  "d9d96af6-ce04-4d84-9f46-87b53876ea65",
+  "725add0b-85a3-4a47-ba37-7b8e58064c58",
+  "f54f90e8-52b2-46c8-a020-9d89260e677a",
+  "511b6838-b0e6-41c3-8c47-6c0dcbf35393",
+]
+
+[defaults]
+environment = { pixi = "pixi.toml" }
+shell_prelude = "set -euo pipefail; [ -f $HOME/.config/tcga-mixcr/env ] && . $HOME/.config/tcga-mixcr/env || { echo 'license env missing'; exit 1; }"
+
+# --- branch 1: MiXCR directly on BAM -------------------------------------
+
+[[rules]]
+name = "mixcr"
+# 4 threads x 5 concurrent per node = 20 CPUs (the hard per-node policy).
+# Measured 2026-11-16: MiXCR uses ~96% of its thread allocation (7.7/8 cores),
+# so 5 x 4-thread jobs fill ~19/20 cores vs 15.4 with 2 x 8-thread jobs —
+# ~25% more throughput. 48G x 5 = 240G, inside node1's 257G.
+resources = { threads = 4, memory = "48G" }
+description = "MiXCR rna-seq preset on BAM: align/assemble/extend clonotypes (CDR3-centric); merges chimeric BAM first when present"
+output = [
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.clones.tsv",
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.qc.json",
+  # COMPLETION SENTINEL, written as the last action. The cluster backend
+  # treats "all declared outputs exist" as rule completion; a job killed
+  # mid-run may already have written a partial clones.tsv/qc.json (T3d,
+  # docs/oxoflow_issue_restart_silent_loss.md). With this sentinel the
+  # existence test means "finished", not "started".
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.done",
+]
+log = "logs/{sample}.mixcr.log"
+shell = """
+mkdir -p results/{meta.cancer_type}/{meta.barcode_12}/{sample} tmp/{sample}/mixcr
+# Project rule (AGENTS.md §1.3): TMPDIR MUST be under the project — /tmp is a
+# 70G root partition and MiXCR's JVM temp on big samples fills it (live failure
+# 2026-11-14: "No space left on device" on the 33G sample).
+# WORKDIR-RELATIVE (not main-project absolute): shard workflows run under
+# shards/shardN/ — an absolute main-project TMPDIR that is never mkdir'd
+# crashes MiXCR with NoSuchFileException (Phase 5 first-pass failure,
+# 2026-11-15). Create it, always.
+# PER-RULE subdirectory: mixcr and trust4 of the SAME sample have no
+# dependency edge, so they can run concurrently — a shared tmp/{sample} could
+# have one rule delete the other's scratch. Each rule owns and removes its own.
+export TMPDIR=$PWD/tmp/{sample}/mixcr
+mkdir -p "$TMPDIR"
+# The JVM under a cgroup sizes its default heap from the cgroup limit; give it
+# an explicit, generous ceiling and keep java.io.tmpdir inside the project
+# (a large sample spilled ~12 GB of temps in 5 minutes here).
+export JAVA_TOOL_OPTIONS="-Xmx32g -Djava.io.tmpdir=$TMPDIR -XX:-UsePerfData"
+if [ "{meta.has_chimeric}" = "1" ]; then
+  samtools merge -@ 4 -O BAM -f "$TMPDIR"/merged.bam {meta.bam_genomic} {meta.bam_chimeric}
+  RAW_BAM=$TMPDIR/merged.bam
+else
+  RAW_BAM={meta.bam_genomic}
+fi
+# Primary-alignment-only filter (standard practice, Bolotin 2017 pipeline
+# class): secondary (0x100)/supplementary (0x800) records are extra alignment
+# records of the SAME physical read — keeping them could inflate clonotype
+# counts. Whether MiXCR's BAM reader skips them internally is unverified, so
+# we enforce it explicitly.
+samtools view -@ {threads} -b -F 0x900 -o "$TMPDIR"/primary.bam $RAW_BAM
+PREFIX=results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr
+rm -f $PREFIX.done
+mixcr analyze rna-seq --species hsa --assemble-longest-contigs \
+  --force-overwrite \
+  -t {threads} \
+  "$TMPDIR"/primary.bam \
+  $PREFIX 2>&1 | tee -a logs/{sample}.mixcr.log
+# MiXCR rna-seq exports one clones file PER CHAIN (<prefix>.clones_IGH.tsv,
+# ..._TRA.tsv, ...). Merge them into the single declared <prefix>.clones.tsv
+# with a chain column appended (variable per-sample chain sets cannot be
+# declared as oxo-flow outputs; the merged file is the tracked artifact).
+shopt -s nullglob
+parts=( $PREFIX.clones_*.tsv )
+if [ ${#parts[@]} -eq 0 ]; then
+  # ZERO-CLONOTYPE SAMPLE (verified real: assemble report "Final clonotype
+  # count: 0", 2026-11-15): a low-immune sample can yield no clones at all.
+  # That is valid biology, not a failure — emit header-only tables so
+  # downstream stages run and the sample records "no repertoire".
+  echo "WARN: mixcr produced no per-chain clones exports (zero clonotypes) — writing empty tables"
+  cp scripts/templates/mixcr_clones_header.tsv $PREFIX.clones.tsv
+  [ -e $PREFIX.qc.json ] || echo '[]' > $PREFIX.qc.json
+else
+  { head -1 "${parts[0]}" | sed 's/$/\tchain/';
+    for f in "${parts[@]}"; do
+      ch=$(basename "$f" .tsv); ch=${ch##*.clones_}
+      tail -n +2 "$f" | sed "s/$/\t$ch/"
+    done; } > $PREFIX.clones.tsv
+fi
+echo "$(date -Is) ok" > $PREFIX.done
+# Reclaim this rule's scratch immediately (10-20 GB/sample). The supervisor's
+# two-stage sweep existed precisely because mixcr runs for every sample before
+# any trust4 rule; under the cluster backend nothing else would clean this
+# until standardize — i.e. tens of TB.
+rm -rf "$TMPDIR"
+"""
+
+# --- branch 2: TRUST4 straight from BAM(s) (parallel to branch 1) -----------
+
+[[rules]]
+name = "trust4"
+resources = { threads = 4, memory = "24G" }
+# Priority ladder: when a slot frees, finish what is already in flight for an
+# started sample before starting another sample's mixcr. Together with the
+# instance-level DAG edges this turns the phase-ordered pipeline (all mixcr ->
+# all trust4 -> ...) into per-sample flow.
+priority = 10
+description = "TRUST4 de novo repertoire reconstruction from BAM(s)"
+output = [
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_cdr3.out",
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_report.tsv",
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_airr.tsv",
+  # completion sentinel — see the mixcr rule
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4.done",
+]
+log = "logs/{sample}.trust4.log"
+shell = """
+mkdir -p results/{meta.cancer_type}/{meta.barcode_12}/{sample} tmp/{sample}/trust4
+export TMPDIR=$PWD/tmp/{sample}/trust4
+mkdir -p "$TMPDIR"
+EXTRA=""
+if [ "{meta.has_chimeric}" = "1" ]; then EXTRA="-b {meta.bam_chimeric}"; fi
+P=results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4
+rm -f $P.done
+run-trust4 -b {meta.bam_genomic} $EXTRA \
+  -f reference/trust4/hg38_bcrtcr.fa \
+  --ref reference/trust4/human_IMGT+C.fa \
+  -o $P \
+  -t {threads} --clean 1 --abnormalUnmapFlag 2>&1 | tee -a logs/{sample}.trust4.log
+# ZERO-CLONOTYPE SAMPLE tolerance (same rationale as the mixcr rule): TRUST4
+# writes no AIRR file when nothing is assembled. Emit header-only outputs so
+# the sample is recorded as "no repertoire" instead of failing the workflow.
+for f in "$P"_cdr3.out "$P"_report.tsv "$P"_airr.tsv; do
+  [ -s "$f" ] || { echo "WARN: trust4 produced no/empty $f — writing header-only stub"; }
+done
+[ -s "$P"_airr.tsv ] || cp scripts/templates/trust4_airr_header.tsv "$P"_airr.tsv
+[ -s "$P"_cdr3.out ] || : > "$P"_cdr3.out
+[ -s "$P"_report.tsv ] || : > "$P"_report.tsv
+# TRUST4 leaves *_toassemble.fq / *_assembly.fa behind when a run is
+# interrupted; at production scale (~100-200 MB each x 2,781 samples) they
+# would silently fill results/. Declared outputs are kept.
+rm -f "$P"_toassemble.fq "$P"_assembly.fa
+echo "$(date -Is) ok" > $P.done
+rm -rf "$TMPDIR"
+"""
+
+# --- join: unified clonotype table ---------------------------------------
+
+[[rules]]
+name = "standardize"
+resources = { threads = 1, memory = "4G" }
+priority = 20
+target = true
+description = "Normalize MiXCR clones.tsv + TRUST4 cdr3.out into the unified schema"
+input = [
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.clones.tsv",
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_airr.tsv",
+]
+output = [
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.unified.tsv",
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.unified.done",
+]
+log = "logs/{sample}.standardize.log"
+# Dependencies are inferred from input/output templates: the engine links
+# each instance of this rule to the SAME-SAMPLE producer. An explicit
+# depends_on = ["mixcr", ...] expands to ALL instances of that rule and
+# creates a group-wide barrier — one failed sample blocked 5,562 downstream
+# rules in the 2026-11-16 canary (expand.rs:1053-1067). Do not re-add.
+shell = "python scripts/standardize_clonotypes.py --mixcr {input[0]} --trust4-airr {input[1]} --barcode {meta.barcode_28} --cancer {meta.cancer_type} --output {output[0]} && echo \"$(date -Is) ok\" > {output[1]}"
+
+# --- disk hygiene: reclaim per-sample scratch after the join ----------------
+
+[[rules]]
+name = "cleanup"
+resources = { threads = 1, memory = "1G" }
+priority = 30
+target = true
+description = "Delete per-sample scratch tmp/{sample} once the unified table is written (AGENTS.md §1.3a)"
+input = ["results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.unified.tsv"]
+output = ["results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.tmp_cleaned"]
+log = "logs/{sample}.cleanup.log"
+# Dependencies are inferred from input/output templates: the engine links
+# each instance of this rule to the SAME-SAMPLE producer. An explicit
+# depends_on = ["mixcr", ...] expands to ALL instances of that rule and
+# creates a group-wide barrier — one failed sample blocked 5,562 downstream
+# rules in the 2026-11-16 canary (expand.rs:1053-1067). Do not re-add.
+shell = """
+# Scratch (primary.bam / merged.bam) is 10-20 GB per sample; §1.3a requires
+# every rule that materialises a big transient file to clean it up itself.
+# Guard the target so an empty/unexpanded {sample} can never widen the rm.
+# Integrity gate: never delete a sample's scratch unless its unified table
+# carries the canonical header (a truncated file must not pass as complete).
+head -1 results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.unified.tsv \
+  | grep -q '^barcode_28' || { echo "unified header missing — keeping scratch" >&2; exit 1; }
+D=tmp/{sample}
+case "$D" in
+  tmp/?*) rm -rf "$D" ;;
+  *) echo "refusing to delete unexpected path: $D" >&2; exit 1 ;;
+esac
+echo "$(date -Is) removed $D" > {output[0]}
+"""

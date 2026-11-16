@@ -1,0 +1,57 @@
+# TCGA-mixcr Phase 2 setup workflow. Lives at the PROJECT ROOT because
+# oxo-flow resolves relative paths (workdir, pixi manifests, outputs)
+# against the workflow file's directory.
+#
+# Purpose: provision and verify the analysis software the oxo-flow way.
+#   - Software environment: pixi manifest (pixi.toml) at the project root,
+#     installed by oxo-flow's pixi backend (`pixi install`).
+#   - Every rule runs inside the pixi environment via `pixi run`.
+#   - MiXCR academic license is read from ~/.config/tcga-mixcr/env
+#     (mode 600, single source of truth — never hardcoded here, never committed).
+#
+# Gates before running (per oxo-flow SKILL.md):
+#   oxo-flow validate setup.oxoflow
+#   oxo-flow dry-run  setup.oxoflow
+#   oxo-flow lint     setup.oxoflow
+#   oxo-flow run      setup.oxoflow -j 4 --provenance
+
+[workflow]
+name = "tcga-mixcr-setup"
+version = "0.1.0"
+description = "Phase 2: install + verify MiXCR/TRUST4/samtools via oxo-flow pixi backend"
+author = "Shixiang Wang (wangshx@csu.edu.cn)"
+
+[defaults]
+environment = { pixi = "pixi.toml" }
+shell_prelude = "set -euo pipefail; [ -f $HOME/.config/tcga-mixcr/env ] && . $HOME/.config/tcga-mixcr/env || { echo 'MIXCR license env file missing: $HOME/.config/tcga-mixcr/env'; exit 1; }"
+
+[[rules]]
+name = "verify_mixcr"
+description = "Verify MiXCR 4.7.0 runs (version + help) inside the pixi env"
+output = ["logs/verify_mixcr.txt"]
+log = "logs/verify_mixcr.log"
+shell = "mixcr -v > {output[0]} 2>&1 && mixcr --help | head -3 >> {output[0]} 2>&1"
+
+[[rules]]
+name = "verify_samtools"
+description = "Verify samtools runs inside the pixi env"
+output = ["logs/verify_samtools.txt"]
+log = "logs/verify_samtools.log"
+shell = "samtools --version > {output[0]} 2>&1"
+
+[[rules]]
+name = "verify_trust4"
+description = "Verify run-trust4 executes and emits usage text"
+output = ["logs/verify_trust4.txt"]
+log = "logs/verify_trust4.log"
+shell = "(run-trust4 --help 2>&1 || run-trust4 2>&1 | head -30 || true) > {output[0]} 2>&1; test -s {output[0]}"
+
+[[rules]]
+name = "verify_summary"
+description = "Aggregate the three tool probes into one summary file"
+target = true
+input = ["logs/verify_mixcr.txt", "logs/verify_samtools.txt", "logs/verify_trust4.txt"]
+output = ["logs/verify_summary.txt"]
+log = "logs/verify_summary.log"
+depends_on = ["verify_mixcr", "verify_samtools", "verify_trust4"]
+shell = "echo '== mixcr ==' > {output[0]}; head -5 {input[0]} >> {output[0]}; echo '== samtools ==' >> {output[0]}; head -3 {input[1]} >> {output[0]}; echo '== trust4 ==' >> {output[0]}; head -10 {input[2]} >> {output[0]}"

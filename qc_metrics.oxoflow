@@ -1,0 +1,34 @@
+# qc_metrics.oxoflow — cohort-level repertoire QC metrics.
+# Run AFTER tcga-mixcr.oxoflow has completed (its rules are not per-sample:
+# the aggregator walks results/ and emits ONE cohort table, qc/sample_metrics.tsv).
+# Deliberately a separate workflow (not a rule in tcga-mixcr.oxoflow) so the
+# per-sample pipeline stays resumable sample-by-sample and this aggregate can
+# re-run independently whenever the standardizer changes.
+#
+# Gates: oxo-flow validate|lint qc_metrics.oxoflow
+# Run:   oxo-flow run qc_metrics.oxoflow -j 1 --provenance
+
+[workflow]
+name = "tcga-mixcr-qc"
+version = "0.1.0"
+description = "Cohort repertoire QC metrics (library size, immune content, diversity, chain composition)"
+author = "Shixiang Wang (wangshx@csu.edu.cn)"
+
+[defaults]
+environment = { pixi = "pixi.toml" }
+
+[[rules]]
+name = "sample_metrics"
+resources = { threads = 1, memory = "4G" }
+target = true
+description = "Aggregate per-sample repertoire QC metrics into qc/sample_metrics.tsv"
+output = ["qc/sample_metrics.tsv"]
+log = "logs/sample_metrics.log"
+shell = """
+mkdir -p qc
+python scripts/sample_metrics.py \
+  --results-root results \
+  --manifest manifests/all_samples.tsv \
+  --output qc/sample_metrics.tsv
+test -s qc/sample_metrics.tsv
+"""

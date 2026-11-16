@@ -1,0 +1,74 @@
+# ---- runtime outputs (never tracked) ----
+results/
+tmp/
+logs/
+.oxo-flow/
+.pixi/
+shards/*/results/
+shards/*/tmp/
+shards/*/logs/
+shards/*/.oxo-flow/
+shards/*/.pixi/
+proto/results/
+proto/tmp/
+proto/logs/
+proto/.oxo-flow/
+proto3/results/
+proto3/tmp/
+proto3/logs/
+proto3/.oxo-flow/
+proto3/out/
+proto3/out2/
+proto3/out3/
+proto3/dep_test2/
+s4min/results/
+s4min/tmp/
+s4min/logs/
+s4min/.oxo-flow/
+dep5/
+repro/
+wfcheck/
+wfcheck_shard/
+validate_tmp/
+
+# ---- reference data (licensed / large; fetch separately, see README) ----
+reference/
+*.fa
+*.fasta
+*.fa.gz
+*.bam
+*.bai
+*.fq
+*.fq.gz
+*.fastq
+*.fastq.gz
+
+# ---- large manifests and Zenodo cross-validation data ----
+manifests/trust4_tcga_deidentified_report.tsv
+manifests/*.part
+manifests/*.bam.list
+
+# ---- scheduler / OS noise ----
+slurm-*.out
+slurm-*.err
+.DS_Store
+._*
+*.pyc
+__pycache__/
+
+# ---- prototype / validation scratch directories ----
+proto/
+proto2/
+proto3/
+s4min/
+dep5/
+repro/
+wfcheck/
+wfcheck_shard/
+
+# ---- stale root-level duplicates (canonical copies live in scripts/ and docs/) ----
+/cutover_cluster_backend.sh
+/metrics_reference.md
+/phase4_validation.md
+/go.sh
+/launch_resume.sh

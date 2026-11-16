@@ -1,0 +1,31 @@
+# Sample-type composition of manifests/all_samples.tsv
+# Derived independently 2026-11-14 (subagent re-derivation, barcode_28 field 4 vial codes).
+# AGENTS.md TCGA barcode reference: field 4 = sample type + vial letter.
+
+sample-type composition:
+- 9594  01x  primary solid tumor
+- 714   11x  solid tissue normal
+- 392   06x  metastatic
+- 184   01B
+- 136   03x  blood-derived normal (peripheral blood)
+- 41    02x  recurrent solid tumor
+- 17    11B
+- 14    03B
+- 11    05x  additional metastatic
+- 10    01C
+- plus rarer vials
+
+## Analysis note (Phase 6)
+Do NOT assume tumor/normal-only. Decide inclusion policy for metastatic
+(06x, 05x) and recurrent (02x) samples.
+
+## TCGA sample type code table (field 4, two digits before vial letter)
+01 primary tumor | 02 recurrent | 03 blood-derived normal | 04 blood-derived
+cancer | 05 additional metastatic | 06 metastatic | 07 additional primary |
+08 blood-derived cancer (bone marrow) | 09 bone marrow normal | 10 cell
+line | 11 solid tissue normal | 12 buccal normal | 13 EBV-immortalized
+normal | 14 bone marrow acquired normal | 20 control cell line | 40
+recurrent blood | 50 cell line | 60 xenograft | 61 xenograft derivative |
+71 non-neoplastic control | 99 unknown
+
+Source: https://docs.gdc.cancer.gov/Encyclopedia/pages/TCGA_Barcode/

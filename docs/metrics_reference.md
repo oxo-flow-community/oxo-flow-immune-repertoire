@@ -1,0 +1,93 @@
+# Repertoire Metrics Reference
+
+> Purpose: define every column of `qc/sample_metrics.tsv`, how it is computed,
+> why it is low or high, and how to use it downstream (covariates / filters).
+> Applies to per-sample output of `scripts/sample_metrics.py` over the unified
+> clonotype tables (MiXCR 4.7 + TRUST4 1.1.5 on GDC RNA-seq BAMs).
+> Written 2026-11-15.
+
+## 1. The two "lowness" questions (read this first)
+
+**`mixcr_aligned_frac` ~ 0.01%–0.26% — why so low?**
+This is NOT the BAM's overall alignment rate (that is STAR's 80–90%). It is
+the fraction of reads that MiXCR could align to V/D/J/C **germline immune
+templates**. In bulk tumor RNA-seq, receptor transcripts are inherently rare:
+the transcriptome is dominated by housekeeping/ribosomal/tumor genes, and
+lymphocyte receptor mRNA is ~1e-4 to 1e-3 of total. This matches the yields
+reported in Bolotin 2017 (MiXCR RNA-seq) and Song 2021 (TRUST4). Low absolute
+value is expected biology, not pipeline failure.
+
+**`*_cdr3_frac` — even lower, why?**
+It is the end of a three-stage funnel: total reads → immune-template-aligned
+(aligned_frac) → reads yielding a complete CDR3 clonotype. Further losses
+come from: alignments outside CDR3 (framework/UTR/intron transcription),
+incomplete D-region or hypermutated templates that fail anchoring, and the
+rna-seq preset's requirement that both CDR3 anchors (conserved C / F·W) be
+present. BCR (IGH) suffers extra loss from somatic hypermutation.
+
+**Interpretation rule**: absolute values are meaningless across datasets;
+*relative* values across samples are the signal. `cdr3_frac` spanning
+2e-6 … 1.2e-3 across our 8-sample test set tracks immune infiltration, not
+technical quality.
+
+## 2. Column dictionary
+
+### Library size (covariates)
+
+| column | source | meaning / use |
+|---|---|---|
+| `total_reads` | MiXCR `align.report` ("Total sequencing reads") | sequenced pairs entering align; primary sequencing-depth covariate |
+| `mixcr_aligned_reads`, `_frac` | MiXCR align report | immune-template-aligned reads (frac stored as fraction of total) |
+| `mixcr_cdr3_reads`, `trust4_cdr3_reads` | sum of clonotype read counts | repertoire captured by each tool (library size #2) |
+| `bam_size_gb` | manifest | raw file size; coarse depth proxy |
+
+### Immune content (the recommended filter)
+
+| column | definition | use |
+|---|---|---|
+| `mixcr_cdr3_frac` | `mixcr_cdr3_reads / total_reads` | **immune-content covariate; primary filter**. Suggested floor: `> 1e-5` (≈ clonotypes ≥ 50 in our data) to call a sample "has repertoire". Cross-sample range in test set: 2e-6 (HNSC, "cold") → 1.2e-3 (OV, infiltrated) |
+| `trust4_cdr3_frac` | same, TRUST4 AIRR `consensus_count` sum | TRUST4's de novo capture is template-independent and typically several-fold higher than MiXCR's — the difference itself quantifies template-dependence vs assembly sensitivity |
+
+### Diversity / clonality (per tool)
+
+| column | definition | notes |
+|---|---|---|
+| `clonotypes` | productive rows in unified table | richness (uncorrected; not Chao1 — rarefaction-level estimators deliberately deferred) |
+| `clonality` | `1 − Shannon H / ln(S)` on clonotype read counts | 0 = polyclonal, 1 = oligoclonal; standard immuno-oncology metric |
+| `gini` | Gini coefficient of clonotype read distribution | skew, complementary to clonality |
+| `top_clone_frac` | largest clonotype's read share | AGENTS.md §7.1 flags > 0.5 as possible contamination/oligoclonality |
+
+### Chain composition (per tool, read-share)
+
+`frac_IGH / frac_IGK / frac_IGL / frac_TRA / frac_TRB / frac_TRD / frac_TRG`
+— B vs T lineage infiltration and heavy/light balance. Examples from the
+test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
+
+### Other QC / covariates
+
+| column | meaning |
+|---|---|
+| `mean_cdr3_nt` | mean CDR3 nucleotide length (QC: framework contamination shortens it) |
+| `sample_type` | barcode field 4 code: 01 primary, 02 recurrent, 03 blood-derived normal, 06 metastatic, 11 solid normal (see `manifests/sample_type_distribution.txt`) |
+| `has_chimeric` | 1 = genomic+chimeric analyzed; 0 = genomic-only (642 samples: UCEC 380, COAD 190, READ 72) — detection-sensitivity covariate |
+
+## 3. Downstream usage guide
+
+- **Filter "has repertoire"**: `mixcr_cdr3_frac > 1e-5` AND `mixcr_clonotypes ≥ 50`.
+- **Regression covariates**: `total_reads` + `cdr3_frac` together (depth vs
+  content are orthogonal — 221M reads with 2e-6 content is still "cold").
+- **Do NOT** use raw `total_reads` alone as a size factor: repertoire yield
+  is driven by infiltration, not depth.
+- **Sensitivity flag**: analyses mixing `has_chimeric` 0/1 samples should
+  include the flag as a covariate (or exclude the 642).
+- **Comparing clonality across tools**: MiXCR and TRUST4 clonality agree
+  directionally but differ in granularity (de novo assembly splits clones);
+  use one tool consistently for cross-sample comparisons.
+
+## 4. Provenance & regeneration
+
+```bash
+cd $PROJECT
+oxo-flow run qc_metrics.oxoflow -j 4 --provenance   # after tcga-mixcr.oxoflow
+# → qc/sample_metrics.tsv (full cohort: 11,123 rows)
+```

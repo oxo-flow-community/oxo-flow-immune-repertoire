@@ -1,0 +1,11 @@
+[workspace]
+authors = ["Shixiang Wang <wangshx@csu.edu.cn>"]
+channels = ["conda-forge", "bioconda", "milaboratories"]
+name = "tcga-immune-repertoire"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[dependencies]
+mixcr = "4.7.0"
+samtools = ">=1.17"
+trust4 = ">=1.1.5"

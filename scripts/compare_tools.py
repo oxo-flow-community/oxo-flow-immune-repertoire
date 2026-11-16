@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""compare_tools.py — cross-method validation metrics for one sample:
+MiXCR vs TRUST4 on the unified clonotype table (or the two raw outputs).
+
+Metrics (PLAN.md §4.4):
+  1. top-100 CDR3aa Jaccard similarity            (pass > 0.5)
+  2. V-gene usage Spearman rank correlation        (reported)
+  3. per-clone read-count Pearson r (log10, matched by CDR3aa) (pass > 0.7)
+
+Stdlib only (no numpy/scipy): ranks and Pearson implemented directly.
+"""
+import argparse
+import csv
+import math
+import re
+import sys
+from collections import Counter
+
+# Comparable subset: complete, in-frame CDR3 amino-acid sequences
+# (IMGT-anchored: leading C, trailing F/W, no stop/gap). Both tools emit
+# partial or out-of-frame junctions for some contigs; comparing only the
+# complete subset is the standard practice for cross-method agreement.
+COMPLETE_CDR3 = re.compile(r"^C[A-Z]*[FW]$")
+
+
+def is_complete_cdr3(aa: str) -> bool:
+    return bool(aa) and "*" not in aa and bool(COMPLETE_CDR3.match(aa))
+
+
+def read_unified(path):
+    by_tool = {}
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f, delimiter="\t"):
+            by_tool.setdefault(r["tool"], []).append(r)
+    return by_tool
+
+
+def top_cdr3aa(rows, n=100):
+    """Top-n UNIQUE complete CDR3aa by best read count.
+
+    Independent verification (2026-11-15) showed first-100-rows-then-set can
+    yield <100 uniques when the same junction appears on multiple contigs
+    (OV trust4: 8,957 duplicate-aa rows). Dedupe-first is the standard
+    clonotype-set definition.
+    """
+    best = {}
+    for r in rows:
+        aa = r.get("cdr3_aa", "")
+        if not is_complete_cdr3(aa):
+            continue
+        c = float(r.get("read_count") or 0)
+        if aa not in best or c > best[aa]:
+            best[aa] = c
+    ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+    return {aa for aa, _ in ranked[:n]}
+
+
+def jaccard(a, b):
+    if not a and not b:
+        return 0.0
+    inter = len(a & b)
+    return inter / (len(a | b) or 1)
+
+
+def v_gene_usage(rows):
+    usage = Counter()
+    for r in rows:
+        v = r.get("v_gene", "")
+        if v:
+            usage[v] += float(r.get("read_count") or 0)
+    return usage
+
+
+def ranks(values):
+    """Average ranks for ties, 1-based."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    rk = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        avg = (i + j) / 2 + 1
+        for k in range(i, j + 1):
+            rk[order[k]] = avg
+        i = j + 1
+    return rk
+
+
+def pearson(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    vx = sum((x - mx) ** 2 for x in xs)
+    vy = sum((y - my) ** 2 for y in ys)
+    if vx == 0 or vy == 0:
+        return 0.0
+    return cov / math.sqrt(vx * vy)
+
+
+def spearman(a_counter, b_counter):
+    genes = sorted(set(a_counter) | set(b_counter))
+    if len(genes) < 2:
+        return 0.0
+    xs = [a_counter.get(g, 0.0) for g in genes]
+    ys = [b_counter.get(g, 0.0) for g in genes]
+    return pearson(ranks(xs), ranks(ys))
+
+
+def read_count_map(rows):
+    m = {}
+    for r in rows:
+        aa = r.get("cdr3_aa", "")
+        if not is_complete_cdr3(aa):
+            continue
+        m[aa] = m.get(aa, 0.0) + float(r.get("read_count") or 0)
+    return m
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--unified", required=True, help="*.unified.tsv from standardize_clonotypes.py")
+    ap.add_argument("--topn", type=int, default=100)
+    args = ap.parse_args()
+
+    by_tool = read_unified(args.unified)
+    mx = by_tool.get("mixcr", [])
+    tr = by_tool.get("trust4", [])
+    if not mx or not tr:
+        print("ERROR: unified file must contain both mixcr and trust4 rows", file=sys.stderr)
+        sys.exit(1)
+
+    jac = jaccard(top_cdr3aa(mx, args.topn), top_cdr3aa(tr, args.topn))
+    v_rho = spearman(v_gene_usage(mx), v_gene_usage(tr))
+
+    mx_rc, tr_rc = read_count_map(mx), read_count_map(tr)
+    common = sorted(set(mx_rc) & set(tr_rc))
+    if len(common) >= 2:
+        xs = [math.log10(mx_rc[c] + 1) for c in common]
+        ys = [math.log10(tr_rc[c] + 1) for c in common]
+        rc_r = pearson(xs, ys)
+    else:
+        rc_r = 0.0
+
+    verdict_j = "PASS" if jac > 0.5 else "FAIL"
+    verdict_r = "PASS" if rc_r > 0.7 else "FAIL"
+    print(f"sample: {args.unified}")
+    print(f"clonotypes: mixcr={len(mx)} trust4={len(tr)} common_cdr3aa={len(common)}")
+    print(f"top{args.topn}_cdr3aa_jaccard: {jac:.4f}  ({verdict_j}, threshold 0.5)")
+    print(f"v_gene_usage_spearman:       {v_rho:.4f}")
+    print(f"log10_readcount_pearson:     {rc_r:.4f}  ({verdict_r}, threshold 0.7, n={len(common)})")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,30 @@
+{
+  "name": "oxo-flow-immune-repertoire",
+  "title": "TCGA bulk RNA-seq TCR/BCR immune repertoire profiling (MiXCR + TRUST4)",
+  "origin": "original",
+  "rating": "live-tested",
+  "engine": "oxo-flow",
+  "created": "2026-11-16",
+  "domain": "immunology",
+  "tags": [
+    "immune-repertoire",
+    "TCR",
+    "BCR",
+    "CDR3",
+    "MiXCR",
+    "TRUST4",
+    "TCGA",
+    "RNA-seq",
+    "AIRR",
+    "clonotypes"
+  ],
+  "scope": [
+    "mixcr",
+    "trust4",
+    "standardize",
+    "cleanup"
+  ],
+  "quickstart": "oxo-flow dry-run main.oxoflow",
+  "quickstart_note": "Data-gated: MiXCR/TRUST4 need BAM inputs and the TRUST4 reference FASTAs (hg38_bcrtcr.fa, human_IMGT+C.fa, not committed). Dry-run works against the committed manifests; the shard variant demonstrates the production layout.",
+  "compute": "4 CPUs / 48 GB per mixcr rule, 4 CPUs / 24 GB per trust4 rule; production runs 5 rules per node (20 CPUs, <=48 GB each)"
+}
