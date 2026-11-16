@@ -2,7 +2,7 @@
   "name": "oxo-flow-immune-repertoire",
   "title": "TCGA bulk RNA-seq TCR/BCR immune repertoire profiling (MiXCR + TRUST4)",
   "origin": "original",
-  "rating": "live-tested",
+  "rating": "community",
   "engine": "oxo-flow",
   "created": "2026-11-16",
   "domain": "immunology",

@@ -1,4 +1,4 @@
-# flow-mixcr — TCGA RNA-seq immune repertoire pipeline (MiXCR + TRUST4)
+# oxo-flow-immune-repertoire — TCGA RNA-seq TCR/BCR immune repertoire (MiXCR + TRUST4)
 
 > Part of the [oxo-flow-community](https://github.com/oxo-flow-community) pipeline catalogue.
 
@@ -89,6 +89,10 @@ and the upstream analysis: `docs/oxoflow_issue_cluster_backend.md`,
 `docs/oxoflow_issue_cluster_status.md`.
 
 ## Validation record
+
+Live-test evidence (every rule completed, exit 0, report snapshot) is recorded in
+`docs/t1_cluster_validation.md`; the rating field in `metadata.json` stays
+"community" until the catalogue team reviews it.
 
 - `docs/phase4_validation.md` — per-sample cross-method agreement (Jaccard /
   Spearman / Pearson) and the literature conformance audit.
