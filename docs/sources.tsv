@@ -1,0 +1,15 @@
+key	type	citation	identifier	verified
+bolotin2017	paper	Bolotin DA et al. Antigen receptor repertoire profiling from RNA-seq data. Nat Biotechnol 35:908-911 (2017)	doi:10.1038/nbt.3979	2026-11-17 crossref
+bolotin2015	paper	Bolotin DA et al. MiXCR: software for comprehensive adaptive immunity profiling. Nat Methods 12:380-381 (2015)	doi:10.1038/nmeth.3364	2026-11-17 crossref
+song2021	paper	Song L, Cohen D, Ouyang Z, Cao Y, Hu X, **X. Shirley Liu** (senior author). TRUST4: immune repertoire reconstruction from bulk and single-cell RNA-seq data. Nat Methods 18:627-630 (2021) — our TRUST4 branch implements this tool; parameters follow its README	doi:10.1038/s41592-021-01142-2	2026-11-17 crossref (authorship confirmed)
+thorsson2018	paper	Thorsson V et al. The Immune Landscape of Cancer. Immunity 48:812-830.e14 (2018)	doi:10.1016/j.immuni.2018.03.023	2026-11-17 crossref
+li2016ng	paper	Li B, Li T, Liu JS, **X. Shirley Liu** (senior author). Landscape of tumor-infiltrating T cell repertoire of human cancers. Nat Genet 48:725-732 (2016) — the landmark TCGA RNA-seq TCR-repertoire paper (9,142 samples, 29 cancer types, >600k CDR3)	doi:10.1038/ng.3581	2026-11-17 crossref + Europe PMC abstract
+shugay2015	paper	Shugay M et al. VDJtools: Unifying Post-analysis of T Cell Receptor Repertoires. PLoS Comput Biol 11:e1004503 (2015)	doi:10.1371/journal.pcbi.1004503	2026-11-17 crossref
+mixcr-presets	tool-doc	MiXCR built-in presets (rna-seq requires --species and --assemble-contigs-by or --assemble-longest-contigs)	https://mixcr.com/mixcr/reference/overview-built-in-presets/	2026-11-17 fetched
+trust4-readme	tool-doc	TRUST4 README (-b is a single value; --repseq is for bulk non-UMI TCR/BCR-seq; --abnormalUnmapFlag)	https://github.com/liulab-dfci/TRUST4	2026-11-17 fetched
+samtools-spec	tool-doc	SAM/BAM specification, flag 0x100 secondary / 0x800 supplementary	https://samtools.github.io/hts-specs/SAMv1.pdf	standard
+airr-schema	standard	AIRR Community Rearrangement schema (locus/junction/junction_aa/consensus_count)	https://docs.airr.io/	standard
+gdc-refs	tool-doc	GDC reference files and BAM processing notes	https://gdc.cancer.gov/about-data/gdc-data-processing/gdc-reference-files	standard
+imgt-nomenclature	standard	IMGT gene nomenclature (TRAV/TRBV/TRDV/IGHV/IGKV/IGLV prefixes)	https://www.imgt.org/	standard
+zenodo14251977	dataset	TRUST4 pan-TCGA de-identified repertoire report (project brief §4.4; supplied by the user at project start) — used ONLY for aggregate sanity checks (chain proportions / CDR3 length), never for sample-level matching because IDs are de-identified. Our check: chain-fraction Pearson r=0.898 vs 10,148 samples	https://zenodo.org/records/14251977	2026-11-17 checked
+local-verify	evidence	Project-local experiment; see docs/scientific_rationale.md section 7	for our own measurements that confirm or overturn a documented claim	docs/scientific_rationale.md#7	—

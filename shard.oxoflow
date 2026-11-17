@@ -27,6 +27,18 @@ author = "Shixiang Wang (wangshx@csu.edu.cn)"
 metadata_file = "manifests/metadata.tsv"
 sample_groups_file = "manifests/groups.tsv"
 
+# Sample-aware dispatch ties (oxo-flow >= 0.31.0, issue #1090). Default "rule"
+# orders ready instances by name, which groups every `mixcr` of the chunk
+# before the first `trust4` — a chunk of N samples produced its first unified
+# result only after N/slots mixcr waves (~a week at chunk=100). With
+# "sample", each sample runs its whole chain (mixcr -> trust4 -> standardize
+# -> cleanup) before the next sample starts. A/B verified 2026-11-17 on a
+# synthetic 4-sample x 2-rule workflow:
+#   rule:   s1a s2a s3a s4a s1b s2b s3b s4b
+#   sample: s1a s1b s2a s2b s3a s3b s4a s4b
+[engine]
+dispatch_order = "sample"
+
 [defaults]
 environment = { pixi = "pixi.toml" }
 shell_prelude = "set -euo pipefail; [ -f $HOME/.config/tcga-mixcr/env ] && . $HOME/.config/tcga-mixcr/env || { echo 'license env missing'; exit 1; }"
@@ -36,14 +48,20 @@ shell_prelude = "set -euo pipefail; [ -f $HOME/.config/tcga-mixcr/env ] && . $HO
 [[rules]]
 name = "mixcr"
 # 4 threads x 5 concurrent per node = 20 CPUs (the hard per-node policy).
-# Measured 2026-11-16: MiXCR uses ~96% of its thread allocation (7.7/8 cores),
-# so 5 x 4-thread jobs fill ~19/20 cores vs 15.4 with 2 x 8-thread jobs —
-# ~25% more throughput. 48G x 5 = 240G, inside node1's 257G.
-resources = { threads = 4, memory = "48G" }
-description = "MiXCR rna-seq preset on BAM: align/assemble/extend clonotypes (CDR3-centric); merges chimeric BAM first when present"
+# Measured 2026-11-16: MiXCR uses ~96% of its thread allocation, so 5 x
+# 4-thread jobs fill ~19/20 cores vs 15.4 with 2 x 8-thread jobs.
+# 64G, not 48G (2026-11-17): 17 GB OV BAMs aborted at ~6% alignment with
+# -Xmx32g — MiXCR's own message suggested -Xmx40g, and the JVM heap must fit
+# *together with* the merged/primary BAM page cache charged to the same
+# cgroup (40G heap + ~17G cache < 64G). Same lesson as the LAML 32G crash
+# (AGENTS.md §10): -Xmx must be 40g for full-size TCGA BAMs.
+resources = { threads = 4, memory = "64G" }
+priority = 30
+description = "MiXCR rna-seq preset on the genomic BAM only (the chimeric BAM is a subset of it); primary alignments only"
 output = [
   "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.clones.tsv",
   "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.qc.json",
+  "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.readinfo.tsv",
   # COMPLETION SENTINEL, written as the last action. The cluster backend
   # treats "all declared outputs exist" as rule completion; a job killed
   # mid-run may already have written a partial clones.tsv/qc.json (T3d,
@@ -69,22 +87,59 @@ mkdir -p "$TMPDIR"
 # The JVM under a cgroup sizes its default heap from the cgroup limit; give it
 # an explicit, generous ceiling and keep java.io.tmpdir inside the project
 # (a large sample spilled ~12 GB of temps in 5 minutes here).
-export JAVA_TOOL_OPTIONS="-Xmx32g -Djava.io.tmpdir=$TMPDIR -XX:-UsePerfData"
-if [ "{meta.has_chimeric}" = "1" ]; then
-  samtools merge -@ 4 -O BAM -f "$TMPDIR"/merged.bam {meta.bam_genomic} {meta.bam_chimeric}
-  RAW_BAM=$TMPDIR/merged.bam
-else
-  RAW_BAM={meta.bam_genomic}
-fi
+# -Xmx MUST be an argument, not JAVA_TOOL_OPTIONS: the MiXCR launcher
+# appends its own -Xmx (min(12g, free-memory cap)) whenever no -Xmx
+# argument is present, and that later option overrides the env var.
+# Observed 2026-11-17: every job really ran with 1.4-2.4 GB of heap
+# ("This run used approximately 1394m" is Runtime.maxMemory).
+export JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$TMPDIR -XX:-UsePerfData"
+# GENOMIC BAM ONLY (2026-11-17, scientific review C1).
+# [SRC:gdc-refs] [LOCAL-VERIFY: docs/scientific_rationale.md#7 C1] The GDC chimeric BAM
+# is a strict subset of the genomic BAM — verified on 44f9e45d: 4,839 unique
+# read names from chimera's first 5,000 records matched 9,741 genomic records
+# (~2 per name, both mates), and MiXCR's own totalReadsProcessed equals
+# (genomic primary + chimeric primary)/2 for a merged sample. Merging counted
+# every chimeric read twice in 94.2% of the cohort, and the 642 samples
+# without a chimeric BAM are exactly UCEC/COAD/READ — i.e. the bias was
+# confounded with cancer type. Do NOT re-add the merge.
+RAW_BAM={meta.bam_genomic}
 # Primary-alignment-only filter (standard practice, Bolotin 2017 pipeline
+# [SRC:samtools-spec 0x100/0x800] [SRC:bolotin2017]
 # class): secondary (0x100)/supplementary (0x800) records are extra alignment
 # records of the SAME physical read — keeping them could inflate clonotype
 # counts. Whether MiXCR's BAM reader skips them internally is unverified, so
 # we enforce it explicitly.
 samtools view -@ {threads} -b -F 0x900 -o "$TMPDIR"/primary.bam $RAW_BAM
 PREFIX=results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr
-rm -f $PREFIX.done
-mixcr analyze rna-seq --species hsa --assemble-longest-contigs \
+# Clean EVERYTHING this rule may have written before (reviews H9/M2): MiXCR
+# appends to *report.txt/json, and a stale .clones_*.tsv would be merged into
+# the new clones.tsv (17/39 old samples had concatenated, invalid report JSON
+# and one had an empty-chain .clones_.tsv leak into TRA).
+rm -f $PREFIX.done $PREFIX.clones.tsv $PREFIX.clones_*.tsv $PREFIX.clones_.tsv \
+      $PREFIX.*.report.json $PREFIX.*.report.txt $PREFIX.qc.json \
+      $PREFIX.alignments.vdjca $PREFIX.partial_assemblies.clna $PREFIX.contigs.clns
+# read length / layout (review H2): TCGA mixes 76 bp single-end and 48 bp
+# paired-end; both drive extraction efficiency, so record them per sample.
+# `head -1` closes the pipe and samtools dies with SIGPIPE — under the
+# workflow's `set -o pipefail` that made the whole pipeline "fail" and the
+# fallback wrote NA for every sample (observed live 2026-11-17). Toggle
+# pipefail around the capture instead of trusting the exit status.
+set +o pipefail
+FIRST_REC=$(samtools view -F 0x904 {meta.bam_genomic} 2>/dev/null | head -1)
+set -o pipefail
+{
+  if [ -n "$FIRST_REC" ]; then
+    printf '%s\n' "$FIRST_REC" | awk -v s={sample} 'BEGIN{OFS="\t"}{print s, length($10), (($2 % 2 == 1)?"paired-end":"single-end"), $2}'
+  else
+    printf '{sample}\tNA\tNA\tNA\n'
+  fi
+} > results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.readinfo.tsv
+# [SRC:mixcr-presets] rna-seq preset REQUIRES --species and
+# --assemble-longest-contigs (or --assemble-contigs-by); it is a preset
+# requirement, not an optimisation. -Xmx must be an argument because the
+# MiXCR launcher overrides JAVA_TOOL_OPTIONS.
+# [LOCAL-VERIFY: docs/scientific_rationale.md#7 item 3 and 4]
+mixcr -Xmx40g analyze rna-seq --species hsa --assemble-longest-contigs \
   --force-overwrite \
   -t {threads} \
   "$TMPDIR"/primary.bam \
@@ -107,10 +162,17 @@ else
   { head -1 "${parts[0]}" | sed 's/$/\tchain/';
     for f in "${parts[@]}"; do
       ch=$(basename "$f" .tsv); ch=${ch##*.clones_}
+      # an empty chain suffix means the clone could not be assigned to one
+      # locus (chimeric/ambiguous V-J); it must not be silently filed under
+      # whichever chain its V gene prefix suggests (review M2)
+      [ -z "$ch" ] && ch="ambiguous"
       tail -n +2 "$f" | sed "s/$/\t$ch/"
     done; } > $PREFIX.clones.tsv
 fi
-echo "$(date -Is) ok" > $PREFIX.done
+# Sentinel records the parameters that define this generation (review H3):
+# without them sample_metrics could not tell an 8-thread/32G pre-cutover file
+# from a current 4-thread/40G one.
+echo "mixcr-v2 genomic-only threads={threads} xmx=40g $(date -Is)" > $PREFIX.done
 # Reclaim this rule's scratch immediately (10-20 GB/sample). The supervisor's
 # two-stage sweep existed precisely because mixcr runs for every sample before
 # any trust4 rule; under the cluster backend nothing else would clean this
@@ -123,12 +185,12 @@ rm -rf "$TMPDIR"
 [[rules]]
 name = "trust4"
 resources = { threads = 4, memory = "24G" }
-# Priority ladder: when a slot frees, finish what is already in flight for an
-# started sample before starting another sample's mixcr. Together with the
-# instance-level DAG edges this turns the phase-ordered pipeline (all mixcr ->
-# all trust4 -> ...) into per-sample flow.
-priority = 10
-description = "TRUST4 de novo repertoire reconstruction from BAM(s)"
+# Priorities are GLOBAL, not per sample: a higher value on trust4 would run
+# every trust4 before any mixcr (observed 2026-11-16: 20/20 slots on trust4,
+# mixcr starved, no unified produced). The ladder below runs the long pole
+# first and lets each sample's downstream stages jump ahead once ready.
+priority = 20
+description = "TRUST4 de novo repertoire reconstruction from the genomic BAM"
 output = [
   "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_cdr3.out",
   "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_report.tsv",
@@ -141,8 +203,14 @@ shell = """
 mkdir -p results/{meta.cancer_type}/{meta.barcode_12}/{sample} tmp/{sample}/trust4
 export TMPDIR=$PWD/tmp/{sample}/trust4
 mkdir -p "$TMPDIR"
+# Do NOT pass a second -b (2026-11-17, scientific review C1): run-trust4
+# only reads $bamFiles[0] — the second -b was silently ignored all along, and
+# the chimeric BAM is a subset of the genomic one anyway. One input, one
+# meaning, same as the mixcr rule.
+# [SRC:trust4-readme] -b is a single value; --repseq is only for targeted
+# bulk non-UMI TCR/BCR-seq, so it is NOT used here (unselected RNA-seq).
+# [LOCAL-VERIFY: docs/scientific_rationale.md#7 item 2]
 EXTRA=""
-if [ "{meta.has_chimeric}" = "1" ]; then EXTRA="-b {meta.bam_chimeric}"; fi
 P=results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4
 rm -f $P.done
 run-trust4 -b {meta.bam_genomic} $EXTRA \
@@ -172,7 +240,7 @@ rm -rf "$TMPDIR"
 [[rules]]
 name = "standardize"
 resources = { threads = 1, memory = "4G" }
-priority = 20
+priority = 40
 target = true
 description = "Normalize MiXCR clones.tsv + TRUST4 cdr3.out into the unified schema"
 input = [
@@ -196,7 +264,7 @@ shell = "python scripts/standardize_clonotypes.py --mixcr {input[0]} --trust4-ai
 [[rules]]
 name = "cleanup"
 resources = { threads = 1, memory = "1G" }
-priority = 30
+priority = 50
 target = true
 description = "Delete per-sample scratch tmp/{sample} once the unified table is written (AGENTS.md §1.3a)"
 input = ["results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.unified.tsv"]

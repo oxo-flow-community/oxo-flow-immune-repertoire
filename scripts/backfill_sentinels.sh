@@ -24,35 +24,41 @@ ROOT=${1:?usage: backfill_sentinels.sh <results_root> [--apply]}
 APPLY=${2:-}
 [ -d "$ROOT" ] || { echo "no such directory: $ROOT" >&2; exit 1; }
 
+# Structural completeness, not mere existence (review H8): a job killed
+# mid-write leaves a file that exists but is truncated. check_tsv_integrity
+# verifies the header, per-row column count and trailing newline.
+CTI="python3 -I $(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check_tsv_integrity.py"
+intact() { $CTI --quiet "$1" >/dev/null 2>&1; }
+
 n_mixcr=0; n_trust4=0; n_unified=0; n_incomplete=0
 while IFS= read -r f; do
   base=${f%.mixcr.clones.tsv}
-  if [ -e "${base}.mixcr.qc.json" ]; then
+  if [ -e "${base}.mixcr.qc.json" ] && intact "$f"; then
     if [ ! -e "${base}.mixcr.done" ]; then
       n_mixcr=$((n_mixcr + 1))
       [ "$APPLY" = "--apply" ] && echo "backfilled mixcr $(date -Is)" > "${base}.mixcr.done"
     fi
   else
     n_incomplete=$((n_incomplete + 1))
-    echo "SKIP mixcr (qc.json missing): $f" >&2
+    echo "SKIP mixcr (qc.json missing or clones.tsv truncated): $f" >&2
   fi
 done < <(find "$ROOT" -name '*.mixcr.clones.tsv' -type f 2>/dev/null)
 
 while IFS= read -r f; do
   base=${f%.trust4_airr.tsv}
-  if [ -e "${base}.trust4_cdr3.out" ] && [ -e "${base}.trust4_report.tsv" ]; then
+  if [ -e "${base}.trust4_cdr3.out" ] && [ -e "${base}.trust4_report.tsv" ] && intact "$f"; then
     if [ ! -e "${base}.trust4.done" ]; then
       n_trust4=$((n_trust4 + 1))
       [ "$APPLY" = "--apply" ] && echo "backfilled trust4 $(date -Is)" > "${base}.trust4.done"
     fi
   else
     n_incomplete=$((n_incomplete + 1))
-    echo "SKIP trust4 (sibling outputs missing): $f" >&2
+    echo "SKIP trust4 (sibling outputs missing or airr.tsv truncated): $f" >&2
   fi
 done < <(find "$ROOT" -name '*.trust4_airr.tsv' -type f 2>/dev/null)
 
 while IFS= read -r f; do
-  if head -1 "$f" 2>/dev/null | grep -q '^barcode_28'; then
+  if head -1 "$f" 2>/dev/null | grep -q '^barcode_28' && intact "$f"; then
     base=${f%.unified.tsv}
     if [ ! -e "${base}.unified.done" ]; then
       n_unified=$((n_unified + 1))
@@ -60,7 +66,7 @@ while IFS= read -r f; do
     fi
   else
     n_incomplete=$((n_incomplete + 1))
-    echo "SKIP unified (no canonical header): $f" >&2
+    echo "SKIP unified (no canonical header or truncated): $f" >&2
   fi
 done < <(find "$ROOT" -name '*.unified.tsv' -type f 2>/dev/null)
 

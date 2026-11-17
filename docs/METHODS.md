@@ -249,7 +249,7 @@ run-trust4 -b genomic.bam -f hg38_bcrtcr.fa --ref human_IMGT+C.fa
 
 | Error Source | Impact | Mitigation |
 |--------------|--------|------------|
-| Low immune infiltration | Few CDR3 reads, unreliable clonotypes | Flag samples with < 0.1% CDR3 reads |
+| Low immune infiltration | Few CDR3 reads, unreliable clonotypes | Apply the chain-specific floors in `docs/metrics_reference.md` §2a (the old "< 0.1 %" figure is not applicable to unselected bulk RNA-seq) |
 | RNA degradation | Short fragments, truncated CDR3 | assemblePartial rescues partial alignments |
 | PCR errors | Artificial clonotype diversity | MiXCR fuzzy clustering; TRUST4 coverage threshold |
 | Sequencing errors | Wrong bases in CDR3 | Quality-guided correction (both tools) |

@@ -1,0 +1,35 @@
+TRUST4 v1.1.5-r573 usage: ./run-trust4 [OPTIONS]:
+Required:
+	-b STRING: path to bam file
+	-1 STRING -2 STRING: path to paired-end read files
+	-u STRING: path to single-end read file
+	-f STRING: path to the fasta file coordinate and sequence of V/D/J/C genes
+Optional:
+	--ref STRING: path to detailed V/D/J/C gene reference file from IMGT database. (default: not used but recommended)
+	-o STRING: prefix of output files. (default: inferred from file prefix)
+	--od STRING: the directory for output files. (default: ./)
+	-t INT: number of threads (default: 1)
+	-k INT: the starting k-mer size for indexing contigs (default: 9)
+	--barcode STRING: if -b, bam field for barcode; if -1 -2/-u, file containing barcodes (default: not used)
+	--barcodeLevel STRING: barcode is for cell or molecule (default: cell)
+	--barcodeWhitelist STRING: path to the barcode whitelist (default: not used)
+	--barcodeTranslate STRING: path to the barcode translate file (default: not used)
+	--UMI STRING: if -b, bam field for 10x Genomics-like UMI; if -1 -2/-u, file containing 10x Genomics-like UMIs (default: not used)
+	--readFormat STRING: format for read, barcode and UMI files (example: r1:0:-1,r2:0:-1,bc:0:15,um:16:-1 for paired-end files with barcode and UMI)
+	--repseq: the data is from bulk,non-UMI-based TCR-seq or BCR-seq (default: not set)
+	--contigMinCov INT: ignore contigs that have bases covered by fewer than INT reads (default: 0)
+	--minHitLen INT: the minimal hit length for a valid overlap (default: auto)
+	--mateIdSuffixLen INT: the suffix length in read id for mate. (default: not used)
+	--skipMateExtension: do not extend assemblies with mate information, useful for SMART-seq (default: not used)
+	--skipReadRealign: do not realign reads in annotator, useful for reducing computation cost of barcode/UMI-based repseq (default: not used)
+	--abnormalUnmapFlag: the flag in BAM for the unmapped read-pair is nonconcordant (default: not set)
+	--noExtraction: directly use the files from provided -1 -2/-u to assemble (default: extraction first)
+	--imgtAdditionalGap STRING: description for additional gap codon position in IMGT (0-based), e.g. "TRAV:7,83" for mouse (default: no)
+	--assembleWithRef: conduct the assembly with --ref file (default: use -f file)
+	--outputReadAssignment: output read assignment results to the prefix_assign.out file (default: no output)
+	--stage INT: start TRUST4 on specified stage (default: 0):
+		0: start from beginning (candidate read extraction)
+		1: start from assembly
+		2: start from annotation
+		3: start from generating the report table
+	--clean INT: clean up files. 0: no clean. 1: clean intermediate files. 2: only keep AIRR files. (default: 0)

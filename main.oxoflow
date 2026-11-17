@@ -37,6 +37,18 @@ samples = [
   "511b6838-b0e6-41c3-8c47-6c0dcbf35393",
 ]
 
+# Sample-aware dispatch ties (oxo-flow >= 0.31.0, issue #1090). Default "rule"
+# orders ready instances by name, which groups every `mixcr` of the chunk
+# before the first `trust4` — a chunk of N samples produced its first unified
+# result only after N/slots mixcr waves (~a week at chunk=100). With
+# "sample", each sample runs its whole chain (mixcr -> trust4 -> standardize
+# -> cleanup) before the next sample starts. A/B verified 2026-11-17 on a
+# synthetic 4-sample x 2-rule workflow:
+#   rule:   s1a s2a s3a s4a s1b s2b s3b s4b
+#   sample: s1a s1b s2a s2b s3a s3b s4a s4b
+[engine]
+dispatch_order = "sample"
+
 [defaults]
 environment = { pixi = "pixi.toml" }
 shell_prelude = "set -euo pipefail; [ -f $HOME/.config/tcga-mixcr/env ] && . $HOME/.config/tcga-mixcr/env || { echo 'license env missing'; exit 1; }"
@@ -49,7 +61,8 @@ name = "mixcr"
 # Measured 2026-11-16: MiXCR uses ~96% of its thread allocation (7.7/8 cores),
 # so 5 x 4-thread jobs fill ~19/20 cores vs 15.4 with 2 x 8-thread jobs —
 # ~25% more throughput. 48G x 5 = 240G, inside node1's 257G.
-resources = { threads = 4, memory = "48G" }
+resources = { threads = 4, memory = "64G" }
+priority = 30
 description = "MiXCR rna-seq preset on BAM: align/assemble/extend clonotypes (CDR3-centric); merges chimeric BAM first when present"
 output = [
   "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr.clones.tsv",
@@ -79,13 +92,17 @@ mkdir -p "$TMPDIR"
 # The JVM under a cgroup sizes its default heap from the cgroup limit; give it
 # an explicit, generous ceiling and keep java.io.tmpdir inside the project
 # (a large sample spilled ~12 GB of temps in 5 minutes here).
-export JAVA_TOOL_OPTIONS="-Xmx32g -Djava.io.tmpdir=$TMPDIR -XX:-UsePerfData"
-if [ "{meta.has_chimeric}" = "1" ]; then
-  samtools merge -@ 4 -O BAM -f "$TMPDIR"/merged.bam {meta.bam_genomic} {meta.bam_chimeric}
-  RAW_BAM=$TMPDIR/merged.bam
-else
-  RAW_BAM={meta.bam_genomic}
-fi
+# -Xmx MUST be an argument, not JAVA_TOOL_OPTIONS: the MiXCR launcher
+# appends its own -Xmx (min(12g, free-memory cap)) whenever no -Xmx
+# argument is present, and that later option overrides the env var.
+# Observed 2026-11-17: every job really ran with 1.4-2.4 GB of heap
+# ("This run used approximately 1394m" is Runtime.maxMemory).
+export JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$TMPDIR -XX:-UsePerfData"
+# GENOMIC BAM ONLY (2026-11-17, scientific review C1): the GDC chimeric BAM
+# is a strict subset of the genomic BAM, so merging it counted those reads
+# twice in 94.2% of the cohort (and the 642 samples without one are exactly
+# UCEC/COAD/READ). Do not re-add the merge.
+RAW_BAM={meta.bam_genomic}
 # Primary-alignment-only filter (standard practice, Bolotin 2017 pipeline
 # class): secondary (0x100)/supplementary (0x800) records are extra alignment
 # records of the SAME physical read — keeping them could inflate clonotype
@@ -94,7 +111,7 @@ fi
 samtools view -@ {threads} -b -F 0x900 -o "$TMPDIR"/primary.bam $RAW_BAM
 PREFIX=results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.mixcr
 rm -f $PREFIX.done
-mixcr analyze rna-seq --species hsa --assemble-longest-contigs \
+mixcr -Xmx40g analyze rna-seq --species hsa --assemble-longest-contigs \
   --force-overwrite \
   -t {threads} \
   "$TMPDIR"/primary.bam \
@@ -133,11 +150,11 @@ rm -rf "$TMPDIR"
 [[rules]]
 name = "trust4"
 resources = { threads = 4, memory = "24G" }
-# Priority ladder: when a slot frees, finish what is already in flight for an
-# started sample before starting another sample's mixcr. Together with the
-# instance-level DAG edges this turns the phase-ordered pipeline (all mixcr ->
-# all trust4 -> ...) into per-sample flow.
-priority = 10
+# Priorities are GLOBAL, not per sample: a higher value on trust4 would run
+# every trust4 before any mixcr (observed 2026-11-16: 20/20 slots on trust4,
+# mixcr starved, no unified produced). The ladder below runs the long pole
+# first and lets each sample's downstream stages jump ahead once ready.
+priority = 20
 description = "TRUST4 de novo repertoire reconstruction from BAM(s)"
 output = [
   "results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4_cdr3.out",
@@ -152,7 +169,8 @@ mkdir -p results/{meta.cancer_type}/{meta.barcode_12}/{sample} tmp/{sample}/trus
 export TMPDIR=$PWD/tmp/{sample}/trust4
 mkdir -p "$TMPDIR"
 EXTRA=""
-if [ "{meta.has_chimeric}" = "1" ]; then EXTRA="-b {meta.bam_chimeric}"; fi
+# run-trust4 reads only $bamFiles[0]; a second -b was silently ignored
+# (review C1). One input, one meaning.
 P=results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.trust4
 rm -f $P.done
 run-trust4 -b {meta.bam_genomic} $EXTRA \
@@ -182,7 +200,7 @@ rm -rf "$TMPDIR"
 [[rules]]
 name = "standardize"
 resources = { threads = 1, memory = "4G" }
-priority = 20
+priority = 40
 target = true
 description = "Normalize MiXCR clones.tsv + TRUST4 cdr3.out into the unified schema"
 input = [
@@ -206,7 +224,7 @@ shell = "python scripts/standardize_clonotypes.py --mixcr {input[0]} --trust4-ai
 [[rules]]
 name = "cleanup"
 resources = { threads = 1, memory = "1G" }
-priority = 30
+priority = 50
 target = true
 description = "Delete per-sample scratch tmp/{sample} once the unified table is written (AGENTS.md §1.3a)"
 input = ["results/{meta.cancer_type}/{meta.barcode_12}/{sample}/{meta.barcode_28}.unified.tsv"]

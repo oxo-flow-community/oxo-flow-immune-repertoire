@@ -70,10 +70,33 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 | `mean_cdr3_nt` | mean CDR3 nucleotide length (QC: framework contamination shortens it) |
 | `sample_type` | barcode field 4 code: 01 primary, 02 recurrent, 03 blood-derived normal, 06 metastatic, 11 solid normal (see `manifests/sample_type_distribution.txt`) |
 | `has_chimeric` | 1 = genomic+chimeric analyzed; 0 = genomic-only (642 samples: UCEC 380, COAD 190, READ 72) — detection-sensitivity covariate |
+| `mixcr_generation` | provenance of the MiXCR table: `current` = produced by the rule definition now in the repository; `pre-cutover` = produced by the earlier local-mode workflow and carried across the cluster-backend cutover with a backfilled sentinel; `unknown` = sentinel absent. Both generations ran the identical MiXCR preset and filters (`rna-seq --species hsa --assemble-longest-contigs`, primary-alignment-only `-F 0x900`); only threading, memory, logging and scratch layout differ. Retain it as a stratification column in mixed analyses |
+
+## 2a. Authoritative thresholds (single source of truth, 2026-11-17)
+
+> **This table is the only definition of "has repertoire" in the project.**
+> AGENTS.md §7, METHODS.md and any downstream script must reference it rather
+> than restating numbers — the old documents disagreed (1e-5 vs 0.1 %, which
+> differ by 100x). `cdr3_frac` is **pooled across chains**, so it can pass on
+> Ig reads while the sample has only a handful of TRB reads; T-cell statements
+> need the chain-specific row.
+
+| Purpose | Metric | Provisional threshold | Basis |
+|---|---|---|---|
+| "has BCR repertoire" | `mixcr_IGH_cdr3_reads` | ≥ 50 reads | **provisional** — calibrate against this cohort's detection-saturation curve |
+| "has TCR repertoire" | `mixcr_TRB_cdr3_reads` | ≥ 20 reads | **provisional** — same |
+| Effective depth for diversity | `mixcr_cdr3_reads` | ≥ 1,000 (rarefaction depth) | VDJtools requires equal depth before comparing diversity |
+| Any cross-sample diversity comparison | `mixcr_clonality_rare` / `mixcr_gini_rare` | use the rarefied columns | raw richness/clonality track sequencing depth (4 orders of magnitude here) |
+| Lineage-specific statements | `mixcr_tcr_*` / `mixcr_bcr_*` | never the pooled `mixcr_clonality` | Ig dominates the pool (>95 % of reads in most samples) |
+| Covariates in every model | `total_reads`, `cdr3_frac`, `has_chimeric`, `read_layout`, `read_length`, `sample_type` | always include | Bolotin 2017 (read length), Thorsson 2018 (layout), review H1/H2 |
+
+No literature defines a universal per-sample read floor for unselected bulk
+RNA-seq; the rows marked *provisional* must be replaced by values derived from
+this cohort's own saturation analysis before any publication claim.
 
 ## 3. Downstream usage guide
 
-- **Filter "has repertoire"**: `mixcr_cdr3_frac > 1e-5` AND `mixcr_clonotypes ≥ 50`.
+- **Filter "has repertoire"**: use §2a (chain-specific reads + rarefaction depth). The old pooled rule `mixcr_cdr3_frac > 1e-5 AND mixcr_clonotypes >= 50` is superseded: it passes samples whose TRB reads are in the single digits.
 - **Regression covariates**: `total_reads` + `cdr3_frac` together (depth vs
   content are orthogonal — 221M reads with 2e-6 content is still "cold").
 - **Do NOT** use raw `total_reads` alone as a size factor: repertoire yield
@@ -87,7 +110,7 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 ## 4. Provenance & regeneration
 
 ```bash
-cd $PROJECT
+cd $HOME/Projects/TCGA-mixcr
 oxo-flow run qc_metrics.oxoflow -j 4 --provenance   # after tcga-mixcr.oxoflow
 # → qc/sample_metrics.tsv (full cohort: 11,123 rows)
 ```

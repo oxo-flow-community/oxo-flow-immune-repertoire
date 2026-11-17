@@ -23,7 +23,7 @@
 ## 1. Freeze the old pipeline
 
 ```bash
-ssh <login-node>
+ssh bioinfo-node4
 # stop the supervisor so it cannot resubmit the sbatch-based shard jobs
 pkill -f "supervisor[.]sh"
 pgrep -af "supervisor[.]sh" || echo "supervisor stopped"
@@ -38,7 +38,7 @@ work already done is recorded in `shards/shardN/.oxo-flow/checkpoint.json`.
 ## 2. Prepare all shards (dry run, then apply)
 
 ```bash
-cd $PROJECT
+cd $HOME/Projects/TCGA-mixcr
 bash scripts/cutover_cluster_backend.sh            # inspect the report
 bash scripts/cutover_cluster_backend.sh --apply
 ```
@@ -51,7 +51,7 @@ validate/lint gates per shard.
 
 ```bash
 for n in 1 2 3 4; do
-  setsid nohup $PROJECT/scripts/driver_shard.sh $n \
+  setsid nohup $HOME/Projects/TCGA-mixcr/scripts/driver_shard.sh $n \
       >/dev/null 2>&1 < /dev/null &
   sleep 3
 done
@@ -83,7 +83,7 @@ no job on a node from another shard.
 ```bash
 pkill -f "driver_shard[.]sh"
 scancel -u wsx                     # cancel driver-submitted rule jobs
-cd $PROJECT/shards
+cd $HOME/Projects/TCGA-mixcr/shards
 setsid nohup ./supervisor.sh >/dev/null 2>&1 < /dev/null &   # old path
 squeue -u wsx -o "%.10i %j %T %R"   # expect tcga-shardN jobs again
 ```

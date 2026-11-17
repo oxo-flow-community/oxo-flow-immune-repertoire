@@ -1,21 +1,31 @@
 # qc_metrics.oxoflow — cohort-level repertoire QC metrics.
-# Run AFTER tcga-mixcr.oxoflow has completed (its rules are not per-sample:
-# the aggregator walks results/ and emits ONE cohort table, qc/sample_metrics.tsv).
-# Deliberately a separate workflow (not a rule in tcga-mixcr.oxoflow) so the
-# per-sample pipeline stays resumable sample-by-sample and this aggregate can
-# re-run independently whenever the standardizer changes.
+#
+# Run AFTER the per-sample pipeline has produced unified tables. The aggregator
+# walks every shard's results tree and emits ONE cohort table,
+# qc/sample_metrics.tsv.
+#
+# 2026-11-17 fixes from the scientific review:
+#   H4 — the old version only scanned the project-root `results/` (8 test
+#        samples) and the engine's "output exists => complete" rule then made
+#        it skip forever; the output is now written to a temp file and moved
+#        into place, and --force is passed so a re-run always recomputes.
+#   H1/H2/H3/H6/H7/H10 — the script now reads has_chimeric from the shard
+#        metadata, records read length/layout, derives the MiXCR generation
+#        from the sentinel, reports rarefied diversity and TCR/BCR separately,
+#        and carries count units.
 #
 # Gates: oxo-flow validate|lint qc_metrics.oxoflow
-# Run:   oxo-flow run qc_metrics.oxoflow -j 1 --provenance
+# Run:   oxo-flow run qc_metrics.oxoflow -j 1
 
 [workflow]
 name = "tcga-mixcr-qc"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cohort repertoire QC metrics (library size, immune content, diversity, chain composition)"
 author = "Shixiang Wang (wangshx@csu.edu.cn)"
 
 [defaults]
 environment = { pixi = "pixi.toml" }
+shell_prelude = "set -euo pipefail"
 
 [[rules]]
 name = "sample_metrics"
@@ -27,8 +37,15 @@ log = "logs/sample_metrics.log"
 shell = """
 mkdir -p qc
 python scripts/sample_metrics.py \
-  --results-root results \
-  --manifest manifests/all_samples.tsv \
-  --output qc/sample_metrics.tsv
+  --results-root shards/shard1/results \
+  --results-root shards/shard2/results \
+  --results-root shards/shard3/results \
+  --results-root shards/shard4/results \
+  --manifest shards/shard1/manifests/metadata.tsv \
+  --manifest shards/shard2/manifests/metadata.tsv \
+  --manifest shards/shard3/manifests/metadata.tsv \
+  --manifest shards/shard4/manifests/metadata.tsv \
+  --output qc/sample_metrics.tsv.tmp --force
+mv qc/sample_metrics.tsv.tmp qc/sample_metrics.tsv
 test -s qc/sample_metrics.tsv
 """
