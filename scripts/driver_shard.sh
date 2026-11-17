@@ -57,7 +57,7 @@ CHUNK_RETRIES=${CHUNK_RETRIES:-2}
 MAX_CYCLES=${MAX_CYCLES:-3}
 STALE_MIN=${STALE_MIN:-360}
 # Slurm account owning the jobs: the owner of the shard directory, NOT $USER —
-# the drivers are sometimes started from a root shell on node4 (bioinfo-node4),
+# the drivers are sometimes started from a root shell on a login node,
 # and `squeue -u root` sees none of wsx's jobs. That bug let a restart leave
 # the previous generation running while the new one submitted on top of it
 # (2026-11-17).

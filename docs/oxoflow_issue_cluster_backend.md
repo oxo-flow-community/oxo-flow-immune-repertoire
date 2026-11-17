@@ -52,7 +52,7 @@ shell = "mkdir -p out/{sample} && echo \"start $(date -Is) job=${SLURM_JOB_ID:-n
 ```
 
 Profile: `backend=slurm`, `partition=workq`, `max_submitted=2`,
-`extra_args=["--nodelist=node4","--export=ALL"]`.
+`extra_args=["--nodelist=<node>","--export=ALL"]`.
 
 Steps:
 

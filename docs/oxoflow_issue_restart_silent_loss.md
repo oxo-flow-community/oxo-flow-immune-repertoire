@@ -16,7 +16,7 @@ skipped rules.
 
 ## Reproduction
 
-Profile: `backend=slurm`, `max_submitted=2`, `--nodelist=node4`.
+Profile: `backend=slurm`, `max_submitted=2`, `--nodelist=<node>`.
 
 1. Start the workflow; wait until 2 jobs are RUNNING.
 2. `kill -9 <driver pid>` and `scancel` the two RUNNING job ids.

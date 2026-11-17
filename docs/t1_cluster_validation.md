@@ -34,7 +34,7 @@ workflow is exercised by the shard4 canary, not by this T1 run.
 | spot value check | PASS | 24/24 rows identical to source |
 | cleanup | PASS | 12/12 `.tmp_cleaned`; `tmp/` = 0 B |
 | event stream | PASS | SUBMITTED 35 = COMPLETED 35, FAILED 0; ≤2 concurrent tasks (16 threads) |
-| job resources | PASS | `job.sh`: `--cpus-per-task=8 --mem=32G --nodelist=node4` |
+| job resources | PASS | `job.sh`: `--cpus-per-task=8 --mem=32G --nodelist=<node>` |
 | directory hygiene | PASS | no >100 MB files outside `results/`; `/dev/shm` empty |
 
 Known limitations (all addressed):

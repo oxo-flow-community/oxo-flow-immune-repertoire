@@ -20,13 +20,30 @@
 set -uo pipefail
 BASE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 APPLY=0
-[ "${1:-}" = "--apply" ] && APPLY=1
+LEGACY=0
+for arg in "$@"; do
+  [ "$arg" = "--apply" ] && APPLY=1
+  [ "$arg" = "--legacy" ] && LEGACY=1
+done
+# Refuse to purge while the pipeline is live. On 2026-11-17 a --legacy run
+# during production re-ran the shard section and deleted the tmp/ and
+# .oxo-flow/runs of 3 shards under 11 running jobs, killing ~1 h of work.
+LIVE=$(( $(squeue -u "${JOB_USER:-$(stat -c %U "$BASE/shards/shard1" 2>/dev/null || echo "$USER")}" -h -o "%j" 2>/dev/null \
+          | grep -cE "^(mixcr|trust4|standardize|cleanup)") + $(pgrep -cf "driver_shar[d]\.sh [0-9]$") ))
+if [ "$LIVE" -gt 0 ] && [ "${FORCE_PURGE:-0}" != "1" ]; then
+  echo "REFUSING to purge: $LIVE live job(s)/driver(s). Stop the drivers and cancel jobs first,"
+  echo "or re-run with FORCE_PURGE=1 if you really mean it."
+  exit 3
+fi
 STAMP=$(date +%Y%m%d_%H%M)
 ARCHIVE=$BASE/archive/pre_fix_$STAMP
 LOGDIR=$BASE/logs
 mkdir -p "$LOGDIR"
 
 total=0
+if [ "$LEGACY" -eq 1 ] && [ "$APPLY" -eq 1 ] && [ "${LEGACY_ONLY:-0}" = "1" ]; then
+  :
+else
 for n in 1 2 3 4; do
   S=$BASE/shards/shard$n
   [ -d "$S" ] || { echo "shard$n: missing, skipped"; continue; }
@@ -46,6 +63,28 @@ for n in 1 2 3 4; do
     find "$S/tmp" -mindepth 1 -delete 2>/dev/null
   fi
 done
+fi
+
+# Legacy trees outside shards/ (found by the 2026-11-17 independent audit):
+# the project-root results/, the proto*/ and s4min/ prototype scratch. They
+# hold PRE-FIX outputs (duplicated chimeric reads) and one of them overlaps
+# the current chunk, so they must not survive into any aggregate.
+if [ "$LEGACY" -eq 1 ]; then
+  for d in "$BASE/results" "$BASE/proto/results" "$BASE/proto2/results" \
+           "$BASE/proto3/results" "$BASE/s4min/results"; do
+    [ -d "$d" ] || continue
+    MAN=$LOGDIR/purge_manifest_$(echo "${d#$BASE/}" | tr '/' '_')_${STAMP}.txt
+    find "$d" -type f -printf '%p\t%s\t%TY-%Tm-%Td %TH:%TM\n' 2>/dev/null > "$MAN"
+    count=$(wc -l < "$MAN")
+    total=$((total + count))
+    echo "legacy $d: $count file(s) — manifest: $MAN"
+    if [ "$APPLY" -eq 1 ]; then
+      mkdir -p "$ARCHIVE/legacy/$(echo "${d#$BASE/}" | tr '/' '_')"
+      find "$d" -name '*.unified.tsv' -exec cp --parents {} "$ARCHIVE/legacy/$(echo "${d#$BASE/}" | tr '/' '_')/" \; 2>/dev/null
+      find "$d" -mindepth 1 -delete 2>/dev/null
+    fi
+  done
+fi
 
 if [ "$APPLY" -eq 1 ]; then
   echo "PURGED $total file(s); old unified tables archived under $ARCHIVE"

@@ -8,8 +8,8 @@
 #
 #     max_submitted x memory_per_job  <=  BUDGET_PCT% x MemTotal
 #
-# Node RAM is NOT uniform on this cluster (node1 515G, node2 251G, node3
-# 376G, node4 1385G), so the same max_submitted is safe on one node and
+# Node RAM is NOT uniform on this cluster (e.g. 515 GB, 251 GB,
+# 376 GB, 1385 GB), so the same max_submitted is safe on one node and
 # fatal on another — the 2026-11-16 node2 failure ("Not enough memory for
 # run command ... machine has 256911 Mb") was exactly that.
 #

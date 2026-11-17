@@ -23,7 +23,7 @@
 ## 1. Freeze the old pipeline
 
 ```bash
-ssh bioinfo-node4
+ssh <login-node>
 # stop the supervisor so it cannot resubmit the sbatch-based shard jobs
 pkill -f "supervisor[.]sh"
 pgrep -af "supervisor[.]sh" || echo "supervisor stopped"
