@@ -11,7 +11,7 @@
 #      explicit -Xmx2g argument, a successful run proves the argument wins.
 #
 # Uses the shard's pixi env directly (no pixi binary on PATH under srun):
-#   srun -n 1 -p workq -w node3 -c 1 --mem=4G bash \
+#   srun -n 1 -p workq -w <node> -c 1 --mem=4G bash \
 #        $HOME/Projects/TCGA-mixcr/scripts/probe_mixcr_memory.sh
 set -uo pipefail
 S=${SHARD_DIR:-$HOME/Projects/TCGA-mixcr/shards/shard3}
@@ -19,7 +19,10 @@ cd "$S" || exit 1
 PATH="$S/.pixi/envs/default/bin:$PATH"
 command -v mixcr >/dev/null || { echo "mixcr not found in $S/.pixi/envs/default/bin"; exit 3; }
 
-BAM=$(ls /mnt/tcga/wpan3/OV/*.rna_seq.genomic.gdc_realn.bam 2>/dev/null | head -1)
+# BAM is site-specific: pass it in (BAM=/path/to/sample.bam) rather than
+# relying on the hardcoded pattern this project uses.
+BAM=${BAM:-$(ls ${BAM_GLOB:-*.bam} 2>/dev/null | head -1)}
+[ -n "$BAM" ] || { echo "set BAM=/path/to/sample.bam (or BAM_GLOB) first"; exit 3; }
 echo "host=$(hostname -s) bam=$BAM"
 grep -E "MemFree|MemAvailable" /proc/meminfo
 

@@ -76,7 +76,7 @@ as a completed result:
 
 ```
 $ cat out/S12/done.txt
-start 2026-11-15T22:36:55-05:00 host=node4 job=1259 task=2
+start 2026-11-15T22:36:55-05:00 host=<node> job=1259 task=2
                                        # no "done" line, yet the rule was skipped
 
 $ cat out/S11/done.txt                 # also killed, but its file had been

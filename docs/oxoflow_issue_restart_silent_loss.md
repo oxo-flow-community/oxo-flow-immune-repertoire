@@ -36,7 +36,7 @@ rule as complete:
 
 ```
 $ cat proto3/out/S12/done.txt        # job 1259 was scancelled mid-run
-start 2026-11-15T22:36:55-05:00 host=node4 job=1259 task=2
+start 2026-11-15T22:36:55-05:00 host=<node> job=1259 task=2
                                       # <- no "done" line; file still counts
 ```
 

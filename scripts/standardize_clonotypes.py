@@ -4,7 +4,8 @@ trust_cdr3.out into the unified clonotype schema (AGENTS.md §5.3).
 
 Unified columns:
   barcode_28, barcode_15, barcode_12, cancer_type, tool, chain,
-  cdr3_nt, cdr3_aa, v_gene, j_gene, c_gene, read_count, clone_fraction, clone_count
+  cdr3_nt, cdr3_aa, v_gene, j_gene, c_gene, read_count, clone_fraction, clone_count,
+  count_unit
 
 chain is inferred from the V-gene prefix (TRAV/TRBV/TRGV/TRDV/IGHV/IGKV/IGLV)
 or from the tool's own locus/chain column.
@@ -31,8 +32,28 @@ import sys
 COLUMNS = [
     "barcode_28", "barcode_15", "barcode_12", "cancer_type", "tool", "chain",
     "cdr3_nt", "cdr3_aa", "v_gene", "j_gene", "c_gene",
-    "read_count", "clone_fraction", "clone_count",
+    "read_count", "clone_fraction", "clone_count", "count_unit",
 ]
+
+# COUNTS ARE NOT COMPARABLE ACROSS TOOLS (review 2026-11-18, H10).
+# MiXCR's readCount counts read PAIRS, TRUST4's consensus_count counts READS.
+# Verified on TCGA-13-0886:
+#   * MiXCR: sum(readCount) = 31,212, exactly the assemble report's
+#     readsInClones; and align totalReadsProcessed = 138,433,853 = primary
+#     BAM records / 2 — so MiXCR's counting unit really is the pair.
+#   * TRUST4: sum(consensus_count) = 49,871, exactly the `#count` column of
+#     trust4_report.tsv, and trust-airr.pl sources it from trust_cdr3.out's
+#     abundance column. What we verified is that it is TRUST4's own native
+#     abundance; that the upstream tool calls it a read count comes from its
+#     documentation, which the conda package does not ship.
+# The raw ratio is 1.598 overall and locus-dependent (1.37x IGL … 1.80x IGH;
+# per-clone median 1.0, IQR [1,2]). Converting MiXCR pairs to reads (x2, valid
+# only for paired-end) brings the two tools to 0.70–1.05 per chain — i.e. most
+# of the apparent discrepancy IS the unit difference, not a disagreement.
+# Never sum or compare read_count across tools; count_unit says so in-band.
+# A fixed x2 conversion is NOT applied here because MiXCR's unit is one read
+# for single-end libraries — the multiplier depends on read_layout.
+COUNT_UNIT = {"mixcr": "read_pair", "trust4": "read"}
 
 V_PREFIX_TO_CHAIN = {
     "TRAV": "TRA", "TRBV": "TRB", "TRGV": "TRG", "TRDV": "TRD",
@@ -111,6 +132,7 @@ def parse_mixcr(path, barcode, cancer):
                 "read_count": safe_int(r.get("readCount") or r.get("cloneCount") or ""),
                 "clone_fraction": "",
                 "clone_count": safe_int(r.get("readCount") or r.get("cloneCount") or ""),
+                "count_unit": COUNT_UNIT["mixcr"],
             })
     return rows
 
@@ -151,6 +173,7 @@ def parse_trust4_airr(path, barcode, cancer):
                 "read_count": safe_int(count),
                 "clone_fraction": "",
                 "clone_count": count,
+                "count_unit": COUNT_UNIT["trust4"],
             })
     return rows
 

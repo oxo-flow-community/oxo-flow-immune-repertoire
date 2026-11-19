@@ -67,9 +67,9 @@ The run directory already holds everything needed to answer F1/F2/F5:
    planned 11,120   completed 34   running 16   pending 11,070   failed 0
 
    rule          sample       state    node   elapsed/limit  cpu  mem   progress
-   mixcr        0056507f…    running  node1  2:24:11/12h     4    48G   alignment 93%
-   mixcr        008e5b39…    running  node1  0:40:06/12h     4    48G   assembly
-   trust4       01ea7cb3…    running  node3  0:12:02/12h     4    24G   extracting reads
+   mixcr        0056507f…    running  <node>  2:24:11/12h     4    48G   alignment 93%
+   mixcr        008e5b39…    running  <node>  0:40:06/12h     4    48G   assembly
+   trust4       01ea7cb3…    running  <node>  0:12:02/12h     4    24G   extracting reads
    standardize  12183b9e…    pending  –      –              1    4G    waiting for trust4
    ```
 

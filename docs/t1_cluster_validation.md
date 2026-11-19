@@ -3,7 +3,7 @@
 > Scope: prove that the oxo-flow Slurm cluster backend can run the production
 > workflow (mixcr → trust4 → standardize → cleanup) on real TCGA samples, with
 > correct outputs, correct resource use, and correct restart behaviour.
-> Hosts: node4 (Slurm `workq`), 12 samples, profile `max_submitted=2`,
+> Hosts: <node> (Slurm `workq`), 12 samples, profile `max_submitted=2`,
 > per-rule `threads=8 / memory=32G` → 16 CPUs (policy ≤ 20).
 
 ## What ran

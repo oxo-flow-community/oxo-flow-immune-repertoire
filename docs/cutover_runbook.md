@@ -7,7 +7,7 @@
 > 16 CPUs/node). Rule definitions are frozen: editing them invalidates every
 > completed instance and forces a re-run.
 
-> Scope: production Phase 5 (shards 1–4 on node1–4). Written 2026-11-16 after
+> Scope: production Phase 5 (shards 1–4 on <node>–4). Written 2026-11-16 after
 > the prototype and tests T1–T4. Every step is reversible; the rollback is at
 > the end.
 

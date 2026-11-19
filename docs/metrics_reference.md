@@ -107,6 +107,33 @@ this cohort's own saturation analysis before any publication claim.
   directionally but differ in granularity (de novo assembly splits clones);
   use one tool consistently for cross-sample comparisons.
 
+### 3a. TCR and BCR are not the same measurement (2026-11-19)
+
+Measured across the first 10 end-to-end samples, `mixcr_TRB` read totals are
+**22–322** while `mixcr_IGH` totals are **13–62,753** — TCRβ is 200–1000× rarer
+because it is a signalling receptor at ~1–2 mRNA copies per T cell, whereas
+Ig is the secreted effector of plasma cells, and tumour B cells are often
+clonally expanded. Consequences, to be respected in any downstream design:
+
+| Analysis | TCR (TRA/TRB/TRG/TRD) | BCR (IGH/IGK/IGL) |
+|---|---|---|
+| Per-sample diversity (clonality, Gini, top_clone_frac) | **No** — 17–227 distinct CDR3 with 1–2 reads each is not a repertoire estimate, and rarefaction cannot repair it | Yes, when the §2a floor is met |
+| Presence / absence of repertoire | Yes | Yes |
+| V–J usage frequencies | Yes, only **aggregated across samples** | Yes, per sample and aggregated |
+| CDR3 length distribution | Yes, aggregated | Yes |
+| Cross-tool Jaccard as agreement | **No** — the TRB universe (3–227) is so small that two random sets already reach J≈0.65; see `verify_batch`'s `chance_*` and `*_degenerate` columns | Yes, Ig J is 10–90× the chance baseline |
+| Isotype / class-switch (`c_gene`) | n/a | Yes |
+
+Calibration against the literature: Li, Li, Liu et al. (Nat Genet 2016,
+doi:10.1038/ng.3581 — `sources.tsv:li2016ng`) recovered >600,000 CDR3 from
+9,142 TCGA samples, i.e. **~66 per sample on average**. Our 3–227 per sample,
+median in the low hundreds, sits in the same order of magnitude — the sparsity
+is a property of the assay, not a defect of this pipeline.
+
+**Rule of thumb**: report TCR results as population-level summaries with
+per-sample depth shown; report BCR results per sample. Never put a per-sample
+TCR clonality into a clinical regression.
+
 ## 4. Provenance & regeneration
 
 ```bash

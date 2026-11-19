@@ -148,20 +148,26 @@ TCGA RNA-seq BAMs from GDC are:
   - `*.rna_seq.genomic.gdc_realn.bam`: All reads (including unmapped)
   - `*.rna_seq.chimeric.gdc_realn.bam`: Chimeric reads (spanning splice junctions)
 
-### 4.2 BAM → FASTQ for MiXCR
+### 4.2 BAM input — no FASTQ conversion (corrected 2026-11-17)
 
-MiXCR can read BAM directly, but we convert to FASTQ for:
-1. Merging genomic + chimeric (TRUST4 also benefits)
-2. Consistent input format for both tools
-3. Easier parallelization (FASTQ is splittable)
+**MiXCR reads the BAM directly.** Earlier drafts of this document described a
+`samtools fastq` step; that is wrong for GDC harmonized BAMs, which do **not**
+set the READ1/READ2 flags (0x40/0x80). `samtools fastq -1/-2` routes every read
+to the single/other stream, leaving R1/R2 empty (verified 2026-11-14). MiXCR
+pairs reads by QNAME, so the BAM is passed as-is after a primary-alignment
+filter:
 
-**Command**:
 ```bash
-samtools fastq -1 R1.fq.gz -2 R2.fq.gz -0 /dev/null -s /dev/null -n \
-  genomic.bam chimeric.bam
+samtools view -b -F 0x900 -o primary.bam genomic.bam   # drop secondary/supplementary
+mixcr -Xmx40g analyze rna-seq --species hsa --assemble-longest-contigs primary.bam prefix
 ```
 
-**Read naming**: `-n` keeps read names (no /1 /2 suffix) for MiXCR paired-end handling.
+**Do not merge the chimeric BAM.** The GDC chimeric BAM is a strict subset of
+the genomic BAM (verified: read names from the chimeric file match the genomic
+file one-for-one, both mates included), so merging counts those reads twice —
+and the samples without a chimeric BAM are concentrated in UCEC/COAD/READ,
+which would make the bias cancer-type specific (scientific review C1,
+2026-11-17).
 
 ### 4.3 TRUST4 BAM Input
 
@@ -170,7 +176,10 @@ TRUST4 is designed for BAM input:
 run-trust4 -b genomic.bam -f hg38_bcrtcr.fa --ref human_IMGT+C.fa
 ```
 
-**Note**: TRUST4 internally extracts candidate reads. We do NOT need to merge chimeric BAM — TRUST4 handles both if given genomic BAM (chimeric reads are marked in BAM flags).
+**Note**: TRUST4 internally extracts candidate reads, and `run-trust4` only
+reads its **first** `-b` (a second one is silently ignored — verified in the
+v1.1.5 source and by experiment). One genomic BAM is therefore the correct and
+complete input.
 
 ---
 
@@ -182,7 +191,7 @@ run-trust4 -b genomic.bam -f hg38_bcrtcr.fa --ref human_IMGT+C.fa
 
 **Checks**:
 1. Barcode extraction matches expected format
-2. FASTQ read counts match BAM read counts
+2. Primary-alignment counts match the MiXCR align report's totalReadsProcessed
 3. MiXCR and TRUST4 both complete without errors
 4. Output files non-empty and well-formed
 
@@ -279,9 +288,18 @@ Both tools output different formats. Standardize to:
 | `d_gene` | string | IMGT gene name (or empty) |
 | `j_gene` | string | IMGT gene name |
 | `c_gene` | string | Constant region (or empty) |
-| `read_count` | int | Number of reads supporting this clone |
-| `clone_fraction` | float | Fraction of total CDR3 reads |
-| `clone_count` | int | Absolute clonotype count (if applicable) |
+| `read_count` | int | Supporting reads — **unit differs by tool, see `count_unit`** |
+| `clone_fraction` | float | Fraction of that (sample, tool, chain) read pool; sums to 1 per chain |
+| `clone_count` | int | Legacy MiXCR alias of `read_count`; TRUST4 rows reuse the same number |
+| `count_unit` | string | `read_pair` for MiXCR, `read` for TRUST4 |
+
+**`read_count` is NOT comparable across tools** (verified 2026-11-18 on
+TCGA-13-0886). MiXCR's `readCount` counts read **pairs** — its total 31,212
+equals the assemble report's "Reads used in clonotypes" — while TRUST4's
+`consensus_count` counts individual **reads** used to build the contig (total
+49,871). The ratio is locus-dependent (sum 1.37× for IGL to 1.80× for IGH;
+per-clone median 1.0, IQR [1, 2]). Never sum or directly compare `read_count`
+across the two tools; use `clone_fraction`, or restrict to one tool.
 
 ### 7.2 MiXCR to Unified
 

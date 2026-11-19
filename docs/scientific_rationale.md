@@ -14,7 +14,7 @@
 |---|---|---|
 | MiXCR | 4.7.0 | [MiXCR 官方文档](https://mixcr.com/mixcr/)；软件论文 Bolotin 2015 (Nat Methods 12:380–381)；RNA-seq 方法论文 Bolotin 2017 (Nat Biotechnol 35:908–911) |
 | TRUST4 | 1.1.5 | Song 2021 (Nat Methods 18:627–630)；[liulab-dfci/TRUST4 README](https://github.com/liulab-dfci/TRUST4) |
-| 参考 FASTA | `hg38_bcrtcr.fa`, `human_IMGT+C.fa` | TRUST4 README 指定；本地 md5 `236a217d…` / `5511c50f…` 与上游 master 一致，commit `286335cc…`（`reference/trust4/download.log`） |
+| 参考 FASTA | `hg38_bcrtcr.fa` (md5 `236a217d…`), `human_IMGT+C.fa` (md5 `5511c50f…`) | TRUST4 README 指定；与上游 master commit `286335cc…` 一致（记录见 `reference/trust4/download.log` 与 `reference/trust4/PINNED.txt`）。**转载/复现时必须用这两个 md5**，上游 master 变动会导致结果不可复现 |
 | oxo-flow | v0.31.0 | 项目引擎，工作流格式见 `docs/guide`（oxo-flow-src） |
 
 ## 2. 输入与预处理

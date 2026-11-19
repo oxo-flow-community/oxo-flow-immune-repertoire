@@ -1,2 +1,2 @@
 sample	barcode_28	barcode_15	barcode_12	cancer_type	disk	bam_genomic	bam_chimeric	has_chimeric	file_size_bytes
-643bb711-7302-4ba7-bd39-cb0e4d9c2377	TCGA-AA-3696-01A-01R-0905-07	TCGA-AA-3696-01A	TCGA-AA-3696	COAD	wpan1	/mnt/tcga/wpan1/COAD/643bb711-7302-4ba7-bd39-cb0e4d9c2377.rna_seq.genomic.gdc_realn.bam	/mnt/tcga/wpan1/COAD/643bb711-7302-4ba7-bd39-cb0e4d9c2377.rna_seq.chimeric.gdc_realn.bam	0	393866808
+643bb711-7302-4ba7-bd39-cb0e4d9c2377	TCGA-AA-3696-01A-01R-0905-07	TCGA-AA-3696-01A	TCGA-AA-3696	COAD	disk1	/path/to/bams/COAD/643bb711-7302-4ba7-bd39-cb0e4d9c2377.rna_seq.genomic.gdc_realn.bam	/path/to/bams/COAD/643bb711-7302-4ba7-bd39-cb0e4d9c2377.rna_seq.chimeric.gdc_realn.bam	0	393866808

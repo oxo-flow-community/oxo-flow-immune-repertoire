@@ -37,6 +37,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import standardize_clonotypes as sc  # noqa: E402  (production parser, reused on purpose)
 
 COLUMNS = sc.COLUMNS
+
+# Below this many distinct CDR3 amino acids in a chain, a Jaccard index between
+# two tools is dominated by the size of the universe rather than by agreement:
+# two random subsets of sizes a/b drawn from U share ~U*(a/U)*(b/U) sequences.
+# TCGA-13-0886's TRB had U=53 with sets of 37 and 48, giving a chance J of 0.65
+# against an observed 0.60 — i.e. the "agreement" was below chance. Chains
+# under this threshold are reported as degenerate, not as evidence.
+MIN_UNIVERSE_FOR_JACCARD = 500
+
 RULES = {
     "mixcr": ("{b}.mixcr.clones.tsv", "{b}.mixcr.qc.json", "{b}.mixcr.done"),
     "trust4": ("{b}.trust4_cdr3.out", "{b}.trust4_report.tsv",
@@ -47,8 +56,19 @@ RULES = {
 
 
 def read_unified(path):
+    """Read a unified table, normalising the post-2026-11-18 `count_unit` column.
+
+    Tables written before the count_unit column existed are still valid — the
+    unit is a property of the tool, not of the row — so infer it rather than
+    reporting 8,000 "missing" rows for a sample that is simply older. This keeps
+    old and new output comparable during the schema transition.
+    """
     with open(path, newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    for r in rows:
+        if not r.get("count_unit"):
+            r["count_unit"] = {"mixcr": "read_pair", "trust4": "read"}.get(r.get("tool", ""), "")
+    return rows
 
 
 def as_tuple(row):
@@ -118,6 +138,7 @@ def check_conservation(sample_dir, barcode, cancer, actual):
 
 def check_self_consistency(actual, barcode, cancer, sample_dir):
     problems = []
+    ambiguous_rows = 0
     sums = {}
     for r in actual:
         rc = r["read_count"]
@@ -146,7 +167,16 @@ def check_self_consistency(actual, barcode, cancer, sample_dir):
             # standardizer intentionally prefers the tool's own locus.
             system = {"TRA": "TCR", "TRB": "TCR", "TRG": "TCR", "TRD": "TCR",
                       "IGH": "BCR", "IGK": "BCR", "IGL": "BCR"}
-            if (inferred and r["chain"]
+            # `ambiguous` means the clone was exported with an EMPTY chain
+            # suffix, i.e. MiXCR could not put it in any single locus — the M2
+            # rule deliberately avoids filing such a clone under whatever chain
+            # its V gene suggests. A real example (TCGA-VQ-AA6F, 2026-11-19):
+            # V=TRBV21-1 with J=IGHJ4 and C=IGHG1, a TCR/Ig trans-rearrangement.
+            # There is no chain claim, so there is nothing to disagree with;
+            # count them instead of failing, and keep them visible.
+            if r["chain"] == "ambiguous":
+                ambiguous_rows += 1
+            elif (inferred and r["chain"]
                     and system.get(inferred) != system.get(r["chain"])):
                 problems.append(f"chain {r['chain']} disagrees with V gene {v}")
         if r["barcode_28"] != barcode:
@@ -173,7 +203,7 @@ def check_self_consistency(actual, barcode, cancer, sample_dir):
             problems.append(f"qc.json has unexpected type {type(qc).__name__}")
     except (OSError, json.JSONDecodeError) as exc:
         problems.append(f"qc.json unreadable: {exc}")
-    return problems
+    return problems, ambiguous_rows
 
 
 def rank(values):
@@ -254,7 +284,25 @@ def cross_tool(actual):
         rows_t.sort(key=lambda r: -float(r["read_count"] or 0))
         a = {r["cdr3_aa"] for r in rows_m[:100]}
         b = {r["cdr3_aa"] for r in rows_t[:100]}
-        out[f"jaccard_{chain}"] = len(a & b) / len(a | b)
+        j = len(a & b) / len(a | b)
+        out[f"jaccard_{chain}"] = j
+        # A Jaccard value is only interpretable relative to the size of the CDR3
+        # universe it is drawn from. On TCGA-13-0886 the whole sample held 53
+        # distinct TRB aa, and two random sets of 37 and 48 drawn from 53 have an
+        # expected Jaccard of 0.65 — higher than the observed 0.60. Reporting
+        # 0.60 as "agreement" would be backwards, so record the universe size
+        # and the chance baseline next to every value, and flag the chains where
+        # the statistic is degenerate.
+        universe = len({r["cdr3_aa"] for r in rows_m} | {r["cdr3_aa"] for r in rows_t})
+        out[f"universe_{chain}"] = universe
+        if len(a) and len(b) and universe:
+            # E[J] for two random subsets of these sizes drawn from `universe`
+            ea, eb = len(a) / universe, len(b) / universe
+            expected_inter = universe * ea * eb
+            expected_union = universe * (ea + eb - ea * eb)
+            out[f"jaccard_chance_{chain}"] = expected_inter / expected_union
+        if universe < MIN_UNIVERSE_FOR_JACCARD:
+            out[f"jaccard_{chain}_degenerate"] = universe
         um_c, ut_c = usage("mixcr", chain), usage("trust4", chain)
         g = sorted(set(um_c) & set(ut_c))
         if len(g) >= 5:
@@ -291,7 +339,8 @@ def verify_sample(sample_dir):
     ok, detail = check_conservation(sample_dir, barcode, cancer, actual)
     row["conservation_ok"] = ok
     row["conservation_detail"] = detail
-    row["consistency_problems"] = check_self_consistency(actual, barcode, cancer, sample_dir)
+    row["consistency_problems"], row["ambiguous_chain_rows"] = \
+        check_self_consistency(actual, barcode, cancer, sample_dir)
     row.update(cross_tool(actual))
     row["pass"] = (not missing) and ok and not row["consistency_problems"]
     return row
@@ -327,15 +376,34 @@ def main():
     if args.print_ok_count:
         print(sum(1 for r in reports if r.get("pass")))
         return 0
+    # cross_tool() emits *_pooled keys after the M4 per-chain rework; the summary
+    # used to look for the bare names, so both columns printed empty. Show the
+    # pooled value there and keep the per-chain detail in the JSON report.
+    # The correlations are POOLED over chains and are therefore ~97% Ig by read
+    # mass on a real TCGA sample (measured 2026-11-18: IGH+IGK+IGL 2,542 clones
+    # vs TRA+TRB 63). The column name says so; per-chain values stay in --json.
+    alias = {"spearman_vgene_pooled_all": "spearman_vgene_pooled",
+             "pearson_logreads_pooled_all": "pearson_logreads_pooled"}
     header = ["barcode", "cancer", "provenance", "rows", "rows_mixcr", "rows_trust4",
-              "conservation_ok", "jaccard_TRB", "jaccard_IGH", "spearman_vgene",
-              "pearson_logreads", "pass"]
+              "conservation_ok", "jaccard_TRB", "universe_TRB", "chance_TRB",
+              "jaccard_IGH", "universe_IGH", "chance_IGH",
+              "jaccard_IGK", "universe_IGK", "chance_IGK",
+              "spearman_vgene_pooled_all", "pearson_logreads_pooled_all", "pass"]
     print("\t".join(header))
     for r in reports:
         if "error" in r:
             print(f"{os.path.basename(r['sample_dir'])}\tERROR {r['error']}")
             continue
-        print("\t".join(fmt(r.get(h, "")) for h in header))
+        view = dict(r)
+        for h in header:                      # map table names to report keys
+            if h.startswith("chance_"):
+                view[h] = r.get(f"jaccard_chance_{h[len('chance_'):]}", "")
+        print("\t".join(fmt(view.get(alias.get(h, h), "")) for h in header))
+        degen = {k: v for k, v in r.items() if k.endswith("_degenerate")}
+        if degen:
+            print(f"  NOTE {r.get('barcode')}: Jaccard degenerate (too few distinct"
+                  f" CDR3 in the chain universe): "
+                  + ", ".join(f"{k.split('_')[1]}={v}" for k, v in sorted(degen.items())))
     failures = [r for r in reports if not r.get("pass")]
     print(f"\n{len(reports)} sample(s): {len(reports) - len(failures)} pass, {len(failures)} fail")
     for r in failures:

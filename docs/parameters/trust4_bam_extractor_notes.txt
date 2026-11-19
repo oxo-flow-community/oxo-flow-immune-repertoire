@@ -1,0 +1,69 @@
+bam-extractor: what it does with the BAM we hand it
+====================================================
+Source read 2026-11-18: BamExtractor.cpp @ liulab-dfci/TRUST4 master
+(via https://ghfast.top/https://raw.githubusercontent.com/liulab-dfci/TRUST4/master/BamExtractor.cpp)
+
+WHY IT MATTERS
+  MiXCR is fed `samtools view -b -F 0x900` output (primary alignments only),
+  but TRUST4 is fed the ORIGINAL genomic BAM. In our GDC BAMs more than half of
+  all records are secondary (0x100) alignments, so if bam-extractor counted them
+  the two tools would not be seeing the same input and TRUST4's abundances would
+  be inflated.
+
+WHAT THE SOURCE SHOWS
+  1. There is no test of BAM_FSECONDARY or BAM_FSUPPLEMENTARY anywhere in
+     BamExtractor.cpp. It reads every record.
+  2. Candidates are collected into a map keyed by READ NAME:
+         if ( candidates.find( name ) == candidates.end() ) { ... }
+     so the several alignment records of one read collapse onto one entry.
+  3. A candidate is finally kept only if the READ SEQUENCE itself contains
+     receptor k-mers:
+         info.refSet->HasHitInSet( arg.candidates[i].mate1, 0 ) != 0
+     i.e. selection is by sequence content, not by alignment position or MAPQ.
+
+CONSEQUENCE
+  Secondary/supplementary records cannot inflate TRUST4's counts: they carry the
+  same read name and the same sequence as the primary, so they deduplicate to a
+  single candidate, and the keep/reject decision is made on the sequence.
+  Feeding the unfiltered BAM is therefore not a correctness problem.
+
+  It is arguably the SAFER choice: a read whose primary alignment lies outside
+  the receptor loci but whose sequence does contain receptor k-mers is still
+  seen by TRUST4 in the unfiltered BAM, whereas a `-F 0x900` pre-filter could
+  drop it before the extractor ever looks at its sequence.
+
+  This asymmetry between the two tools is deliberate and is NOT a defect:
+  MiXCR counts each alignment RECORD it is given (so it needs the primary-only
+  view), while TRUST4 selects by read sequence and deduplicates by name.
+
+EMPIRICAL CONFIRMATION (2026-11-18, TCGA-13-0886 / 03c8e4fe, OV, 22.87 GB)
+  Receptor-locus records were streamed out of the genomic BAM two ways — every
+  record, and `-F 0x900` primary-only — and each was run through the real
+  bam-extractor with the project's hg38_bcrtcr.fa.
+
+    all-records BAM     2,087,064 records  (674,460 secondary, 7,918 supplementary)
+    primary-only BAM    1,404,686 records
+    distinct read names   717,239 (all)  vs  711,760 (primary)
+
+    bam-extractor output
+      all-records      531,561 reads
+      primary-only     531,514 reads
+      reads ONLY in all-records     47   (0.0088 %)
+      reads ONLY in primary-only     0
+
+  Reading: 674,460 secondary records added 47 candidate reads, i.e. the
+  read-name deduplication predicted from the source is what actually happens;
+  there is no double counting. The all-records output is a strict SUPERSET of
+  the primary-only output, so pre-filtering would have LOST 47 receptor-reads
+  whose primary alignment lies outside the loci — exactly the failure mode the
+  source reading predicted.
+
+  A byte-level diff of the two FASTQ files shows ~62M differing bytes; that is
+  RECORD ORDER (coordinate order changes when secondary records are present),
+  not content: the name sets differ by 47 as above.
+
+CONCLUSION
+  Feeding TRUST4 the unfiltered genomic BAM is correct and is the SAFER choice.
+  Do not add `-F 0x900` to the trust4 rule; the asymmetry with MiXCR is
+  deliberate (MiXCR counts alignment records, TRUST4 selects by read sequence).
+  No re-run is warranted on this account.

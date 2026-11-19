@@ -6,18 +6,18 @@
 
 ## 1. Test set
 
-8 samples, one per disk (wpan1–7) + global-largest stress sample:
+8 samples, one per disk + global-largest stress sample:
 
 | sample_id (uuid8) | cancer | disk | size | has_chimeric | role |
 |---|---|---|---|---|---|
-| 643bb711 | COAD | wpan1 | 0.4G | 0 | smoke / small |
-| f2ab4258 | BRCA | wpan2 | 7.0G | 1 | median |
-| 74e2edb8 | UVM | wpan3 | 7.7G | 1 | median |
-| a563979a | BLCA | wpan4 | 6.8G | 1 | median |
-| d9d96af6 | LAML | wpan5 | 6.6G | 1 | median |
-| 725add0b | SARC | wpan6 | 7.6G | 1 | median |
-| f54f90e8 | HNSC | wpan7 | 7.8G | 1 | median |
-| 511b6838 | OV | wpan3 | 33.0G | 1 | stress / largest |
+| 643bb711 | COAD | <disk> | 0.4G | 0 | smoke / small |
+| f2ab4258 | BRCA | <disk> | 7.0G | 1 | median |
+| 74e2edb8 | UVM | <disk> | 7.7G | 1 | median |
+| a563979a | BLCA | <disk> | 6.8G | 1 | median |
+| d9d96af6 | LAML | <disk> | 6.6G | 1 | median |
+| 725add0b | SARC | <disk> | 7.6G | 1 | median |
+| f54f90e8 | HNSC | <disk> | 7.8G | 1 | median |
+| 511b6838 | OV | <disk> | 33.0G | 1 | stress / largest |
 
 Coverage: every disk exercised; chimeric-merge path exercised by 7/8;
 no-chimeric branch (genomic-only) exercised by 643bb711.
