@@ -101,9 +101,20 @@ def rarefy(counts, depth, seed=RAREFY_SEED):
 
 
 def is_productive(row):
-    """Complete, in-frame CDR3aa: starts with C, ends with F/W, no stop codon."""
+    """Complete, in-frame CDR3aa: starts C, ends F/W, no stop/gap, frame-consistent nt.
+
+    `_` is MiXCR's frameshift marker (e.g. `CALPAL_SKLTF`): such a clone is not
+    productive even though it carries no stop codon. The nucleotide length must
+    be codon-complete whenever `cdr3_nt` is present (independent review,
+    2026-11-23; regression test test/sample_metrics_selftest.py).
+    """
     aa = (row.get("cdr3_aa") or "").strip()
-    return bool(aa) and "*" not in aa and aa.startswith("C") and aa[-1:] in ("F", "W")
+    nt = (row.get("cdr3_nt") or "").strip()
+    if not aa or "*" in aa or "_" in aa:
+        return False
+    if not aa.startswith("C") or aa[-1:] not in ("F", "W"):
+        return False
+    return not nt or len(nt) % 3 == 0
 
 
 def load_unified(path):

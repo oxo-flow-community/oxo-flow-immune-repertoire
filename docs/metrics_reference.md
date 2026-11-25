@@ -72,6 +72,46 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 | `has_chimeric` | 1 = genomic+chimeric analyzed; 0 = genomic-only (642 samples: UCEC 380, COAD 190, READ 72) — detection-sensitivity covariate |
 | `mixcr_generation` | provenance of the MiXCR table: `current` = produced by the rule definition now in the repository; `pre-cutover` = produced by the earlier local-mode workflow and carried across the cluster-backend cutover with a backfilled sentinel; `unknown` = sentinel absent. Both generations ran the identical MiXCR preset and filters (`rna-seq --species hsa --assemble-longest-contigs`, primary-alignment-only `-F 0x900`); only threading, memory, logging and scratch layout differ. Retain it as a stratification column in mixed analyses |
 
+### 原始表的结构事实（2026-11-22 独立复核确认）
+
+- **读数加权 ≠ 克隆计数加权**：按读数份额，**IGK 在 20/20 个样本中是第一链**；
+  按克隆（行）数，IGH 在 13/20 中第一。链读数是表达量与组装效率的混合，不是
+  细胞计数——跨样本比较链组成时须固定同一归一方式，并把 `total_reads` 作为
+  协变量，不可把 `frac_*` 直接当作细胞比例。
+- **out-of-frame 尾部**：MiXCR 合并表中典型 0.2–5% 的行（读加权通常 <1.2%）
+  `aaSeqCDR3` 含 `_`/`*` 或 `cdr3_nt` 长度不是 3 的倍数（部分组装或移码）。
+  2026-11-23 扩大到 38 个样本复核：全批 2.11%，范围 0.37–**9.14%**（离群样本
+  `6efd0395`，IGK 单链 13.24%）。严格分析应按 `len(cdr3_nt) % 3 == 0` 过滤；
+  读加权时影响可忽略，按行计数的丰富度指标会放大。
+- **非生产性行会保留在统一表中**（复核 3 个 TRUST4 样本）：TRUST4 中
+  `productive=F` 的行（`junction_aa` 为空、`junction` 非空）仍写入统一表，
+  `cdr3_aa` 为空字符串（HU-A4GJ 4,852/120,923 行，BR-A4J5 405/8,935，
+  24-1422 62/4,308）。这是有意的：核苷酸分析仍可用。`sample_metrics.py` 的
+  `is_productive()`（非空、无 `*`/`_`、以 C 开头、以 F/W 结尾、且 `cdr3_nt`
+  长度为 3 的倍数）已只统计生产性行，并保留 `*_raw` 计数；**任何下游氨基酸
+  分析必须应用同一过滤**，不能直接按行计数。（2026-11-23 修正：原实现只排除
+  `*`，会把 `CALPAL_SKLTF` 这类移码克隆算作生产性；回归测试
+  `test/sample_metrics_selftest.py`。）
+- **TRUST4 的 in-frame 判据**：`junction` 是核苷酸且密码子完整（含 IMGT 锚点），
+  直接用 `len(junction) % 3 == 0`；**不要按字面剥离首 C / 末 W**——绝大多数行以
+  TGT/TGC 密码子开头（BR-8369 中 3,842/3,940 行以 Cys 密码子开头，只有 8 行
+  首字母恰为 `C`），字面剥离反而制造伪 out-of-frame。
+- **MiXCR 的 `readCount` 是浮点字符串**（如 `1356.0`），不是整数；消费原始表时用
+  `float()`/`int(float())`（`standardize_clonotypes.py::safe_int` 已处理），直接
+  `int()` 会抛异常。已两次让独立复核者的自写解析器踩坑。
+- **chimeric 克隆的链归属**：MiXCR 的 `clonalChainUsage` 会把跨链克隆记到某一链
+  （本批 3 个：2 个 LUSC、1 个 STAD 样本，均为 TRBV/IGHV 混合），而合并规则把
+  空链后缀记为 `ambiguous`（不猜测）。因此按统一表统计的链计数可能与 MiXCR
+  报告差这几行，总数守恒；**链组成以统一表为准**。
+- 另注：`readFraction` 是**每链内**归一（每链和 = 1），跨链相加会得到 2–8；
+  `standardize_clonotypes.py` 已按 (sample, tool, chain) 重新计算 `clone_fraction`，
+  但任何直接消费原始表的脚本都必须按链分层。`clone_fraction` 用 `%.6g` 格式化，
+  格式化后的链内和会偏离 1：实测最大 **2.2e-6**（60 行的 TRB 链），而用精确分数
+  重算的和**恰好 = 1**——纯属 6 位有效数字舍入。因此：严格校验应**从 `read_count`
+  重算** `read_count/链内总和`（精确），不要对格式化字符串求和；若坚持对字符串
+  求和，容差取 **5e-6**；项目自带 `verify_batch.py` 用 0.999–1.001（1e-3），不会
+  被这种舍入误判。
+
 ## 2a. Authoritative thresholds (single source of truth, 2026-11-17)
 
 > **This table is the only definition of "has repertoire" in the project.**

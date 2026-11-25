@@ -86,7 +86,17 @@ exec 9>"$LOCK"
 flock -n 9 || { echo "driver already running for shard$SHARD" >&2; exit 0; }
 
 cd "$DIR" || exit 1
-export PATH="$HOME/.cargo/bin:$PATH"
+# Slurm's client binaries live in /usr/local/bin (symlinks into
+# /opt/hpc4you/slurm/bin) and are NOT on the non-login PATH of the job user —
+# `bash -c 'echo $PATH'` as wsx gives /sbin:/bin:/usr/sbin:/usr/bin, and even
+# the login PATH has /usr/local/sbin but not /usr/local/bin. A driver launched
+# through `sudo -u wsx ...` therefore cannot exec sbatch:
+#   Error: cluster execution failed: config error: failed to run 'sbatch':
+#   No such file or directory (os error 2)
+# Observed 2026-11-22 right after the <node> reboot, which is also the path the
+# cron watchdog uses to relaunch drivers — so this made every automatic
+# relaunch fail. Pin the path here rather than depending on who started us.
+export PATH="/usr/local/bin:/opt/hpc4you/slurm/bin:$HOME/.cargo/bin:$PATH"
 
 EXPECTED=$(awk -F'\t' 'NR>1 { s += split($2, a, ",") } END { print s + 0 }' manifests/groups.tsv)
 
@@ -170,7 +180,14 @@ run_cycle() {
     tries=0
     while :; do
       echo "$(date -Is) cycle $cycle chunk $(basename "$chunk") start (try $((tries + 1)))" >> "$LOG"
-      "$OXO" run tcga-mixcr.oxoflow --profile slurm --samples "@$chunk" >> "$LOG" 2>&1
+      # --keep-going: without it a single failed required rule cancels every other
+# in-flight job in the run (backend/driver.rs keys the cancellation on
+# !keep_going). On 2026-11-20 one sample's TRUST4 OOM therefore killed six
+# unrelated jobs, including a mixcr already 3 h into a 10 h alignment. Our
+# per-sample rules are independent, so a failure in one carries no
+# information about the others and must not destroy their work.
+"$OXO" run tcga-mixcr.oxoflow --profile slurm --samples "@$chunk" \
+  --keep-going >> "$LOG" 2>&1
       rc=$?
       [ "$rc" -eq 0 ] && break
       tries=$((tries + 1))

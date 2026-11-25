@@ -60,7 +60,7 @@ name = "mixcr"
 # 4 threads x 5 concurrent per node = 20 CPUs (the hard per-node policy).
 # Measured 2026-11-16: MiXCR uses ~96% of its thread allocation (7.7/8 cores),
 # so 5 x 4-thread jobs fill ~19/20 cores vs 15.4 with 2 x 8-thread jobs —
-# ~25% more throughput. 48G x 5 = 240G, inside node1's 257G.
+# ~25% more throughput. 48G x 5 = 240G, inside <node>'s 257G.
 resources = { threads = 4, memory = "64G" }
 priority = 30
 description = "MiXCR rna-seq preset on BAM: align/assemble/extend clonotypes (CDR3-centric); merges chimeric BAM first when present"

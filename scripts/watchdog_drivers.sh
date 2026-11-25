@@ -40,7 +40,17 @@ for n in 1 2 3 4; do
     log "shard$n driver missing (first observation)"
     continue
   fi
-  jobs=$(squeue -u "$JOB_USER" -h -o "%j" 2>/dev/null | grep -cE '^(mixcr|trust4|standardize|cleanup)$')
+  # Refuse to relaunch into a cluster with no BAM export. After a <node> reboot
+  # the eight USB disks are NOT mounted automatically (no fstab/systemd unit —
+  # they need /usr/local/bin/mount-tcga-disks.sh), and loading data takes a few
+  # minutes, so this watchdog would otherwise start the drivers within 20 min
+  # against an empty /mnt/tcga and every job would fail. Skipping is safe: the
+  # next cron tick retries once the mount is back.
+  if ! timeout 8 ls /mnt/tcga/wpan1 >/dev/null 2>&1; then
+    log "shard$n driver missing but /mnt/tcga/wpan1 is unreadable — NOT relaunching (run mount-tcga-disks.sh first)"
+    continue
+  fi
+  jobs=$(squeue -u "$JOB_USER" -h -o "%j" 2>/dev/null | grep -cE '^(mixcr|trust4|standardize|cleanup)_all_')
   log "shard$n driver still missing after two checks (queue=$jobs) — relaunching"
   cd "$BASE" || exit 1
   sudo -u "$JOB_USER" setsid nohup bash "$BASE/scripts/driver_shard.sh" "$n" \

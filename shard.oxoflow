@@ -184,7 +184,14 @@ rm -rf "$TMPDIR"
 
 [[rules]]
 name = "trust4"
-resources = { threads = 4, memory = "24G" }
+# 64G, not 24G (2026-11-19): TRUST4 builds a k-mer table whose size scales
+# with the repertoire, and a 21.9 GB BAM with 54,335 MiXCR clones pushed it
+# past the 24 GB cgroup ceiling — the kernel killed it at anon-rss 24.95 GB
+# ("oom-kill:constraint=CONSTRAINT_MEMCG ... task=trust4", <node>, job 2040).
+# Immune-rich samples are precisely the ones this project is about, so the
+# ceiling must fit them; 64G matches the mixcr rule and leaves
+# check_memory_budget.sh per-node arithmetic unchanged.
+resources = { threads = 4, memory = "64G" }
 # Priorities are GLOBAL, not per sample: a higher value on trust4 would run
 # every trust4 before any mixcr (observed 2026-11-16: 20/20 slots on trust4,
 # mixcr starved, no unified produced). The ladder below runs the long pole

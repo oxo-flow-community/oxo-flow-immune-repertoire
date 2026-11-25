@@ -26,5 +26,5 @@
   ],
   "quickstart": "oxo-flow dry-run main.oxoflow",
   "quickstart_note": "Data-gated: MiXCR/TRUST4 need BAM inputs and the TRUST4 reference FASTAs (hg38_bcrtcr.fa, human_IMGT+C.fa, not committed). Dry-run works against the committed manifests; the shard variant demonstrates the production layout.",
-  "compute": "4 CPUs / 48 GB per mixcr rule, 4 CPUs / 24 GB per trust4 rule; production runs 5 rules per node (20 CPUs, <=48 GB each)"
+  "compute": "4 CPUs per rule; the example workflows use 48 GB (mixcr) / 24 GB (trust4), production uses 64 GB for both; run as many slots per node as its CPU cap and RAM allow"
 }
