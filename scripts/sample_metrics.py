@@ -19,9 +19,11 @@ What this version changed after the 2026-11-17 scientific review:
   report metrics after subsampling to a common depth — the requirement stated
   in the VDJtools paper/tutorial [SRC:shugay2015]. The subsample is seeded so
   the table is reproducible.
-* **read length / layout and count unit** (H2/H10): TCGA mixes 76 bp
-  single-end and 48 bp paired-end libraries, and extractability depends on
-  both [SRC:bolotin2017]; MiXCR counts pairs while TRUST4 counts reads, so
+* **read length / layout and count unit** (H2/H10): the literature describes
+  76 bp single-end and 48 bp paired-end TCGA libraries, and extractability
+  depends on both [SRC:bolotin2017]; every one of the 406 instances completed
+  by 2026-11-27 was paired-end (75/48/50/100 bp), so the single-end path is a
+  guard for future input. MiXCR counts pairs while TRUST4 counts reads, so
   `mixcr_count_unit`/`trust4_count_unit` travel with the numbers.
 * **chain-specific productive reads** (2026-11-27 review): `*_IGH_cdr3_reads`
   etc. expose the per-chain read floors that the authoritative "has
@@ -35,7 +37,8 @@ What this version changed after the 2026-11-17 scientific review:
 * **has_chimeric / chimeric_analyzed** (H1): `has_chimeric` only says the
   chimeric BAM exists. `chimeric_analyzed` is the processing covariate: yes
   only for pre-cutover samples with has_chimeric=1 (the C1 fix dropped the
-  chimeric merge; current samples all read the genomic BAM only).
+  chimeric merge; current samples all read the genomic BAM only); `legacy`
+  sentinels get `unknown` (they may predate C1 — run backfill_sentinels first).
 
 Stdlib only.
 """
@@ -65,10 +68,12 @@ def safe_float(x, default=0.0):
 def count_unit_for_layout(layout):
     """Unified-table unit for a MiXCR sample: pairs on PE, reads on SE.
 
-    Must match standardize_clonotypes.py's count_unit so the QC table and the
-    unified table never disagree.
+    Must match standardize_clonotypes.py's count_unit, including its fallback:
+    an unknown layout defaults to read_pair in both places (2026-11-28 audit
+    L3). A separate `cdr3_fraction()` returns empty for unknown layouts because
+    a wrong denominator would be worse than a missing value.
     """
-    return "read_pair" if layout == "paired-end" else "read" if layout == "single-end" else ""
+    return "read" if (layout or "").strip().lower() == "single-end" else "read_pair"
 
 
 def cdr3_fraction(reads, total_reads, layout):
@@ -97,8 +102,14 @@ def bam_size_gb(row):
     The shard metadata.tsv intentionally omits file_size_bytes; it does carry
     the BAM path. A stat over the local/NFS mount is one syscall per sample.
     """
-    if row.get("file_size_bytes"):
-        return round(safe_float(row["file_size_bytes"]) / 1e9, 2)
+    raw = row.get("file_size_bytes")
+    if raw is not None and str(raw).strip().upper() not in ("", "NA"):
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            val = None
+        if val and val > 0:
+            return round(val / 1e9, 2)
     path = row.get("bam_genomic") or ""
     if path:
         try:
@@ -365,8 +376,11 @@ def main():
             "cancer_type": r["cancer_type"],
             "sample_type": bc.split("-")[3][:2],
             "has_chimeric": r.get("has_chimeric", ""),
+            # legacy sentinels predate C1 and may have merged the chimeric BAM:
+            # 'unknown' is honest; no current sample is legacy (2026-11-28 L5).
             "chimeric_analyzed": ("yes" if generation == "pre-cutover"
-                                  and r.get("has_chimeric") == "1" else "no"),
+                                  and r.get("has_chimeric") == "1"
+                                  else "unknown" if generation == "legacy" else "no"),
             "read_length": read_len,
             "read_layout": read_layout,
             "bam_size_gb": bam_size_gb(r),

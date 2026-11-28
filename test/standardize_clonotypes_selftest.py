@@ -17,6 +17,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "standardize_clonotypes.py"
@@ -123,6 +124,12 @@ def main():
                 ["IGH", "TGTGCGAGAGACTGG", "CARDW", "3", "IGHV1-2", "IGHJ4", "IGHM"],
             ])
             write_readinfo(readinfo, layout)
+            out_path = os.path.join(td, "unified.tsv")
+            stale = out_path + ".tmp.999"
+            with open(stale, "w") as f:
+                f.write("stale")
+            old = time.time() - 7200
+            os.utime(stale, (old, old))
             out = run_cli(td)
             got = read_rows(out)
             units = {(r["tool"], r["count_unit"]) for r in got}
@@ -131,8 +138,10 @@ def main():
             failures = check(failures, f"{layout} rows", len(got), 4)
             leftovers = [x for x in os.listdir(td) if ".tmp." in x]
             failures = check(failures, f"{layout} no temp leftovers", leftovers, [])
+            failures = check(failures, f"{layout} stale tmp removed",
+                             os.path.exists(stale), False)
 
-    total = 14
+    total = 16
     print(f"{total - failures}/{total} cases pass")
     return 1 if failures else 0
 

@@ -30,8 +30,12 @@ APPLY=0
 
 shopt -s nullglob
 parts=( "$DIR"/*.clones_*.tsv )
-clones=$(ls "$DIR"/*.mixcr.clones.tsv 2>/dev/null | head -1)
-barcode=$(basename "$(ls "$DIR"/*.mixcr.qc.json 2>/dev/null | head -1)" .mixcr.qc.json)
+# find -print -quit, not `ls` under nullglob: with no match `ls` lists the CWD
+# and the NOTE below then describes an unrelated file (2026-11-28 audit L1).
+clones=$(find "$DIR" -maxdepth 1 -name '*.mixcr.clones.tsv' -print -quit 2>/dev/null)
+qc=$(find "$DIR" -maxdepth 1 -name '*.mixcr.qc.json' -print -quit 2>/dev/null)
+barcode=""
+[ -n "$qc" ] && barcode=$(basename "$qc" .mixcr.qc.json)
 [ -n "$barcode" ] || { echo "REFUSE: no *.mixcr.qc.json — analyze never produced its report"; exit 3; }
 [ "${#parts[@]}" -gt 0 ] || { echo "REFUSE: no *.clones_*.tsv — zero-clonotype sample, use the rule itself"; exit 3; }
 [ -s "$DIR/$barcode.mixcr.readinfo.tsv" ] || { echo "REFUSE: readinfo empty/missing"; exit 3; }

@@ -51,7 +51,7 @@
 |---|---|---|
 | `chain` 由 V 基因前缀推断（IMGT 命名 `TRAV/TRBV/TRDV/IGHV/IGKV/IGLV`），工具自带 locus 优先 | IMGT 基因命名；TRUST4 的 `locus` 字段遵循 AIRR | 标准 |
 | `clone_fraction` 按 **(tool, chain)** 归一，不跨链合并 | BCR 与 TCR 来自不同细胞群，跨链分母会混淆两个受体系统；MiXCR 自身的 readFraction 也是同分母 | 经验选择（有生物学依据） |
-| 两个工具的 CDR3 都含 IMGT Cys/Phe-Trp 锚点 | 实测：MiXCR 的 `CATRGGRSSEGHANW` 对应 `TGTGCCACT…AACTGG`（起 Cys、止 Trp）；TRUST4 的 `junction` 同样含锚点。2026-11-27 对全队列 4,874,295 行做 nt→aa 翻译校验，**100% 一致** | 标准（**原始 aa 可直接匹配**，`verify_batch` 的跨工具 Jaccard 正是如此）。若下游要剥离锚点，必须两侧同时剥离，不能只截一侧；旧版本文档写的“MiXCR 不含锚点、不可直接匹配”是错误陈述，已更正 |
+| 两个工具的 CDR3 都含 IMGT Cys/Phe-Trp 锚点 | 实测：MiXCR 的 `CATRGGRSSEGHANW` 对应 `TGTGCCACT…AACTGG`（起 Cys、止 Trp）；TRUST4 的 `junction` 同样含锚点。对 **productive** 行（当前快照 4,564,170 行）做 nt→aa 翻译校验，**100% 一致**；341,407 个非 productive 行含 `_`/`*`，约 92% 可译（预期，不参与生产性分析） | 标准（**原始 aa 可直接匹配**，`verify_batch` 的跨工具 Jaccard 正是如此）。若下游要剥离锚点，必须两侧同时剥离，不能只截一侧；旧版本文档写的“MiXCR 不含锚点、不可直接匹配”是错误陈述，已更正 |
 | clonality = 1 − Shannon/ln S、Gini、top clone fraction | 免疫肿瘤学常用指标；Thorsson 2018 用同类多样性指标描述 TCGA 免疫景观；VDJtools 提供标准实现 | 文献支持（**但必须做深度校正，见下**） |
 | 多样性/丰富度比较前需 downsampling/rarefaction | VDJtools 论文与官方教程：比较 richness/Shannon/clonality 前先 `DownSample` 到共同深度；Jaccard 是 presence/absence 且被浅样本主导 | 文献支持（**当前实现未做 —— 列为待修项 H6**） |
 | TCR 与 BCR 指标必须分开算 | Thorsson 2018 的 TCR（MiTCR）与 BCR（VDJer）多样性是分开计算的；混合池化会让 TCR 结论被 B 细胞稀释 | 文献支持（**当前实现池化 —— 待修项 H7**） |

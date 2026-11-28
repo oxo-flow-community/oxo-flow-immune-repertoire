@@ -46,7 +46,7 @@ technical quality.
 | column | definition | use |
 |---|---|---|
 | `mixcr_cdr3_frac` | `mixcr_cdr3_reads / total_reads` (both are read pairs) | **immune-content covariate** — do NOT use it as the "has repertoire" filter (superseded 2026-11-17 by §2a: a pooled floor passes samples whose TRB reads are in the single digits). Initial test-set range 2e-6 (HNSC, cold) → 1.2e-3 (OV, infiltrated); the full cohort reaches 9.5e-3, so the test-set upper bound is not a ceiling |
-| `trust4_cdr3_frac` | `trust4_cdr3_reads / (total_reads × 2 for paired-end, × 1 for single-end)`; empty when layout is unknown | TRUST4's de novo capture is template-independent and typically several-fold higher than MiXCR's — the difference itself quantifies template-dependence vs assembly sensitivity. **Do not divide TRUST4 reads by MiXCR pairs**: that inflates the fraction ~2× (fixed 2026-11-27) |
+| `trust4_cdr3_frac` | `trust4_cdr3_reads / (total_reads × 2 for paired-end, × 1 for single-end)`; empty when layout is unknown | After the correct read denominator, TRUST4 and MiXCR are the **same order of magnitude** (first 200 samples: median ratio 0.94, IQR 0.87–1.04, max 2.4) — the old "several-fold higher" was the ~2× inflation from dividing TRUST4 reads by MiXCR pairs. **Do not divide TRUST4 reads by MiXCR pairs** (fixed 2026-11-27). Treat any template-dependence interpretation as requiring recalibration |
 
 ### Diversity / clonality (per tool)
 
@@ -69,9 +69,9 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 |---|---|
 | `mean_cdr3_nt` | mean CDR3 nucleotide length (QC: framework contamination shortens it) |
 | `sample_type` | barcode field 4 code: 01 primary, 02 recurrent, 03 blood-derived normal, 06 metastatic, 11 solid normal (see `manifests/sample_type_distribution.txt`) |
-| `has_chimeric` | **1 = a chimeric BAM exists on disk** (642 samples: UCEC 380, COAD 190, READ 72). It does NOT mean the chimeric reads were analysed: since C1 (2026-11-17) every sample is processed from the genomic BAM only. Use `chimeric_analyzed` as the processing covariate, not this column |
-| `chimeric_analyzed` | `yes` only for pre-cutover samples with `has_chimeric=1` (the pre-C1 workflow ran `samtools merge genomic+chimeric`); `no` for every current sample. This is the correct detection-sensitivity covariate |
-| `mixcr_generation` | provenance of the MiXCR table: `current` = produced by the rule definition now in the repository; `pre-cutover` = produced by the earlier local-mode workflow and carried across the cluster-backend cutover with a backfilled sentinel; `unknown` = sentinel absent. **The two generations are NOT identical**: pre-cutover samples with `has_chimeric=1` aligned a merged genomic+chimeric BAM; current samples align the genomic BAM only. The preset/filters (`rna-seq --species hsa --assemble-longest-contigs`, primary-alignment-only `-F 0x900`) are shared, but input composition differs — do not pool the generations without stratifying, and never mix archived pre-cutover tables into a current cohort |
+| `has_chimeric` | **1 = a chimeric BAM exists on disk**; **0 = absent** (642 samples: UCEC 380, COAD 190, READ 72). It does NOT mean the chimeric reads were analysed: since C1 (2026-11-17) every sample is processed from the genomic BAM only. Use `chimeric_analyzed` as the processing covariate, not this column |
+| `chimeric_analyzed` | `yes` only for pre-cutover samples with `has_chimeric=1` (the pre-C1 workflow ran `samtools merge genomic+chimeric`); `unknown` for `legacy` sentinels (they may predate C1); `no` for every current sample. This is the correct detection-sensitivity covariate |
+| `mixcr_generation` | provenance of the MiXCR table: `current` = produced by the rule definition now in the repository; `pre-cutover` = produced by the earlier local-mode workflow and carried across the cluster-backend cutover with a backfilled sentinel; `legacy` = a sentinel that is neither `mixcr-v2…` nor `backfilled` (pre-C1 clusters wrote `date -Is ok`); `unknown` = sentinel absent. **The generations are NOT identical**: pre-cutover samples with `has_chimeric=1` aligned a merged genomic+chimeric BAM; current samples align the genomic BAM only. The preset/filters (`rna-seq --species hsa --assemble-longest-contigs`, primary-alignment-only `-F 0x900`) are shared, but input composition differs — do not pool the generations without stratifying, and never mix archived pre-cutover/legacy tables into a current cohort. Run `backfill_sentinels.sh` on legacy samples before analysis |
 
 ### 原始表的结构事实（2026-11-22 独立复核确认）
 
@@ -139,7 +139,10 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 > (e.g. `mixcr_IGH_cdr3_reads`, `mixcr_TRB_cdr3_reads`) are now emitted by
 > `sample_metrics.py` and computed on productive rows. Before this fix the
 > columns referenced by this table did not exist, so the thresholds could not
-> be applied.
+> be applied. Rows whose chain is `ambiguous` (empty chain suffix) are
+> excluded from every per-chain column, so on a few samples the seven chain
+> columns sum to slightly less than the pooled `mixcr_cdr3_reads` (2–6 reads;
+> correct by design, since the chain is not guessed).
 
 No literature defines a universal per-sample read floor for unselected bulk
 RNA-seq; the rows marked *provisional* must be replaced by values derived from

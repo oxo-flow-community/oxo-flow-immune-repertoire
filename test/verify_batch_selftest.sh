@@ -54,6 +54,16 @@ expect() {
 standardize
 expect 0 "clean sample passes"
 
+# 2026-11-28 audit H1: a single-end sample's unified table says count_unit=read;
+# verify_batch must rebuild the expected rows with the same unit, not read_pair.
+printf '11111111-2222-3333-4444-555555555555\t75\tsingle-end\t0\n' \
+  > "$D/$B.mixcr.readinfo.tsv"
+standardize
+expect 0 "single-end sample passes (count_unit=read)"
+printf '11111111-2222-3333-4444-555555555555\t75\tpaired-end\t163\n' \
+  > "$D/$B.mixcr.readinfo.tsv"
+standardize
+
 grep -v IGHM "$D/$B.unified.tsv" > "$D/u.tmp" && mv "$D/u.tmp" "$D/$B.unified.tsv"
 expect 1 "dropped row is caught"
 standardize

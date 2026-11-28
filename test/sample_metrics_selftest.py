@@ -73,7 +73,9 @@ def helper_cases():
     failures = check(failures, "PE unit", sm.count_unit_for_layout("paired-end"),
                      "read_pair")
     failures = check(failures, "SE unit", sm.count_unit_for_layout("single-end"), "read")
-    failures = check(failures, "unknown unit", sm.count_unit_for_layout(""), "")
+    # unknown layout falls back to read_pair, matching standardize
+    failures = check(failures, "unknown unit fallback",
+                     sm.count_unit_for_layout(""), "read_pair")
     failures = check(failures, "PE trust4 fraction",
                      sm.cdr3_fraction(100, 1000, "paired-end"), 0.05)
     failures = check(failures, "SE trust4 fraction",
@@ -90,6 +92,9 @@ def helper_cases():
                          sm.bam_size_gb({"bam_genomic": path}), 0.12)
         failures = check(failures, "bam size from manifest",
                          sm.bam_size_gb({"file_size_bytes": "2000000000"}), 2.0)
+        failures = check(failures, "bam size NA falls back to stat",
+                         sm.bam_size_gb({"file_size_bytes": "NA",
+                                         "bam_genomic": path}), 0.12)
     return failures
 
 
@@ -98,7 +103,7 @@ def main():
     for name, sample_row, expected in CASES:
         failures = check(failures, name, sm.is_productive(sample_row), expected)
     failures += helper_cases()
-    total = len(CASES) + 12
+    total = len(CASES) + 13
     print(f"{total - failures}/{total} cases pass")
     return 1 if failures else 0
 

@@ -121,7 +121,12 @@ def check_conservation(sample_dir, barcode, cancer, actual):
     """Rebuild the expected rows from the sources with the production parser."""
     mixcr_path = os.path.join(sample_dir, f"{barcode}.mixcr.clones.tsv")
     airr_path = os.path.join(sample_dir, f"{barcode}.trust4_airr.tsv")
-    rows = sc.parse_mixcr(mixcr_path, barcode, cancer)
+    # Use the SAME per-sample count_unit as standardize: MiXCR counts pairs on
+    # paired-end and reads on single-end. Assuming read_pair here made every
+    # single-end sample fail conservation (2026-11-28 audit H1).
+    layout = sc.read_layout(mixcr_path, barcode)
+    rows = sc.parse_mixcr(mixcr_path, barcode, cancer,
+                          sc.count_unit_for_layout(layout))
     rows += sc.parse_trust4_airr(airr_path, barcode, cancer)
     expected = [as_tuple(r) for r in sc.assign_chain_fractions(rows)]
     got = [as_tuple(r) for r in actual]
@@ -402,19 +407,17 @@ def main():
     if args.print_ok_count:
         print(sum(1 for r in reports if r.get("pass")))
         return 0
-    # cross_tool() emits *_pooled keys after the M4 per-chain rework; the summary
-    # used to look for the bare names, so both columns printed empty. Show the
-    # pooled value there and keep the per-chain detail in the JSON report.
-    # The correlations are POOLED over chains and are therefore ~97% Ig by read
-    # mass on a real TCGA sample (measured 2026-11-18: IGH+IGK+IGL 2,542 clones
-    # vs TRA+TRB 63). The column name says so; per-chain values stay in --json.
-    alias = {"spearman_vgene_pooled_all": "spearman_vgene_pooled",
-             "pearson_logreads_pooled_all": "pearson_logreads_pooled"}
+    # cross_tool() emits the pooled V-gene key only; per-chain values stay in
+    # --json. The read-count Pearson was removed on 2026-11-27 (pair vs read;
+    # locus-dependent), so its summary column no longer exists.
+    # The pooled Spearman is ~97% Ig by read mass on a real TCGA sample
+    # (measured 2026-11-18: IGH+IGK+IGL 2,542 clones vs TRA+TRB 63).
+    alias = {"spearman_vgene_pooled_all": "spearman_vgene_pooled"}
     header = ["barcode", "cancer", "provenance", "rows", "rows_mixcr", "rows_trust4",
               "conservation_ok", "jaccard_TRB", "universe_TRB", "chance_TRB",
               "jaccard_IGH", "universe_IGH", "chance_IGH",
               "jaccard_IGK", "universe_IGK", "chance_IGK",
-              "spearman_vgene_pooled_all", "pearson_logreads_pooled_all", "pass"]
+              "spearman_vgene_pooled_all", "pass"]
     print("\t".join(header))
     for r in reports:
         if "error" in r:

@@ -31,9 +31,11 @@ Stdlib only — runs in the project pixi env.
 """
 import argparse
 import csv
+import glob
 import os
 import re
 import sys
+import time
 
 COLUMNS = [
     "barcode_28", "barcode_15", "barcode_12", "cancer_type", "tool", "chain",
@@ -267,6 +269,14 @@ def main():
     # Write then rename: a crash mid-write must never leave a truncated
     # unified.tsv under the previous run's still-present sentinel. The cluster
     # backend does not roll back failed outputs (unlike the local executor).
+    # A SIGKILL bypasses the finally block; clean very old leftovers of THIS
+    # sample only (age-gated so a concurrent attempt is never robbed).
+    for stale in glob.glob(f"{args.output}.tmp.*"):
+        try:
+            if time.time() - os.path.getmtime(stale) > 3600:
+                os.unlink(stale)
+        except OSError:
+            pass
     tmp = f"{args.output}.tmp.{os.getpid()}"
     try:
         with open(tmp, "w", newline="") as f:

@@ -5,10 +5,12 @@ MiXCR vs TRUST4 on the unified clonotype table (or the two raw outputs).
 Metrics (PLAN.md §4.4):
   1. top-100 CDR3aa Jaccard similarity                     (pass > 0.5)
   2. V-gene usage Spearman rank correlation                 (reported)
-  3. per-clone clone_fraction Pearson r (log10, matched by CDR3aa, per chain)
-     (pass > 0.7). Read counts are NOT comparable across tools: MiXCR counts
-     read pairs, TRUST4 counts reads, and the ratio is locus-dependent. The
-     per-chain clone_fraction is dimensionless and is the valid quantity.
+  3. per-clone clone_fraction Pearson r (log10, matched by CDR3aa, per chain,
+     only chains with >=5 shared CDR3s) (pass > 0.7). Read counts are NOT
+     comparable across tools: MiXCR counts read pairs, TRUST4 counts reads,
+     and the ratio is locus-dependent. The per-chain clone_fraction is
+     dimensionless and is the valid quantity; 2-point correlations are not
+     allowed to set the verdict.
 
 Stdlib only (no numpy/scipy): ranks and Pearson implemented directly.
 """
@@ -27,8 +29,18 @@ from collections import Counter
 COMPLETE_CDR3 = re.compile(r"^C[A-Z]*[FW]$")
 
 
-def is_complete_cdr3(aa: str) -> bool:
-    return bool(aa) and "*" not in aa and bool(COMPLETE_CDR3.match(aa))
+def is_productive_row(row) -> bool:
+    """Same rule as sample_metrics.is_productive and verify_batch.
+
+    The AA regex alone accepts frameshift (`_`) rows and ignores a
+    non-codon-complete cdr3_nt; all three consumers must agree (2026-11-28
+    audit M3).
+    """
+    aa = (row.get("cdr3_aa") or "").strip()
+    nt = (row.get("cdr3_nt") or "").strip()
+    if not aa or "*" in aa or "_" in aa or not COMPLETE_CDR3.match(aa):
+        return False
+    return not nt or len(nt) % 3 == 0
 
 
 def read_unified(path):
@@ -49,9 +61,9 @@ def top_cdr3aa(rows, n=100):
     """
     best = {}
     for r in rows:
-        aa = r.get("cdr3_aa", "")
-        if not is_complete_cdr3(aa):
+        if not is_productive_row(r):
             continue
+        aa = r["cdr3_aa"]
         c = float(r.get("read_count") or 0)
         if aa not in best or c > best[aa]:
             best[aa] = c
@@ -69,6 +81,8 @@ def jaccard(a, b):
 def v_gene_usage(rows):
     usage = Counter()
     for r in rows:
+        if not is_productive_row(r):
+            continue
         v = r.get("v_gene", "")
         if v:
             usage[v] += float(r.get("read_count") or 0)
@@ -118,9 +132,9 @@ def fraction_map(rows):
     """Sum clone_fraction per CDR3aa (per-chain normalized, dimensionless)."""
     m = {}
     for r in rows:
-        aa = r.get("cdr3_aa", "")
-        if not is_complete_cdr3(aa):
+        if not is_productive_row(r):
             continue
+        aa = r["cdr3_aa"]
         try:
             frac = float(r.get("clone_fraction") or "")
         except (TypeError, ValueError):
@@ -159,7 +173,7 @@ def main():
         fm = fraction_map(mx_chains[chain])
         ft = fraction_map(tr_chains[chain])
         shared = sorted(set(fm) & set(ft))
-        if len(shared) >= 2:
+        if len(shared) >= 5:
             per_chain.append((chain, len(shared), pearson(
                 [math.log10(fm[c] + 1e-12) for c in shared],
                 [math.log10(ft[c] + 1e-12) for c in shared])))
