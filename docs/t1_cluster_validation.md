@@ -1,5 +1,8 @@
 # T1 — cluster-backend end-to-end validation (2026-11-16)
 
+> **历史记录**：当时统一表为 14 列；当前为 15 列（新增 `count_unit`，2026-11-18）。
+> 本文的 schema 断言仅反映当时的实现。
+
 > Scope: prove that the oxo-flow Slurm cluster backend can run the production
 > workflow (mixcr → trust4 → standardize → cleanup) on real TCGA samples, with
 > correct outputs, correct resource use, and correct restart behaviour.

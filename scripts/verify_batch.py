@@ -14,9 +14,11 @@ Checks every sample that has a `*.unified.tsv`:
                     agrees with the V-gene prefix; barcodes match the path;
                     counts are non-negative integers; clone_count == read_count
                     for MiXCR (by design).
-  E. cross-tool     Jaccard (top-100 CDR3 aa), Spearman (V-gene usage) and
-                    Pearson on log read counts of shared CDR3s. Reported, not
-                    gated — the expected range is biological, not fixed.
+  E. cross-tool     Jaccard (top-100 productive CDR3 aa), Spearman (V-gene
+                    usage) and Pearson on log clone_fraction of shared CDR3s,
+                    all per chain. Reported, not gated — the expected range is
+                    biological, not fixed. Read counts are never compared
+                    across tools (pair vs read; locus-dependent ratio).
 
 Exit status: 0 if every sample passes A-D, 1 otherwise.
 Stdlib only.
@@ -232,6 +234,23 @@ def pearson(xs, ys):
     return num / (dx * dy) if dx and dy else float("nan")
 
 
+def is_productive_cdr3(row):
+    """Complete, in-frame CDR3aa (same rule as sample_metrics.is_productive).
+
+    Cross-tool agreement must not be computed on frameshift (`_`) or stop (`*`)
+    rows: they are mis-assembled tails whose abundance depends on the tool's
+    error correction, not on the repertoire. The 2026-11-27 review found the
+    top-100 Jaccard and the count correlation were including them.
+    """
+    aa = (row.get("cdr3_aa") or "").strip()
+    nt = (row.get("cdr3_nt") or "").strip()
+    if not aa or "*" in aa or "_" in aa:
+        return False
+    if not aa.startswith("C") or aa[-1:] not in ("F", "W"):
+        return False
+    return not nt or len(nt) % 3 == 0
+
+
 def cross_tool(actual):
     """Cross-tool agreement, computed PER CHAIN (review M4).
 
@@ -239,6 +258,11 @@ def cross_tool(actual):
     reads 100:1, so a pooled V-gene Spearman is really an Ig measurement.
     Jaccard is inherently depth-sensitive (VDJtools), so treat it as
     descriptive, not a pass/fail gate.
+
+    Agreement is measured on productive clones: Jaccard of the top-100 CDR3aa
+    and Pearson of log clone_fraction (a dimensionless, per-chain-normalized
+    quantity). Read counts are NOT compared across tools — MiXCR counts pairs
+    and TRUST4 counts reads, and the ratio is locus-dependent.
     """
     out = {}
     by_tool = {"mixcr": [], "trust4": []}
@@ -248,36 +272,38 @@ def cross_tool(actual):
     def usage(tool, chain=None):
         counts = {}
         for r in by_tool.get(tool, []):
-            if r["v_gene"] and (chain is None or r["chain"] == chain):
+            if (r["v_gene"] and is_productive_cdr3(r)
+                    and (chain is None or r["chain"] == chain)):
                 counts[r["v_gene"]] = counts.get(r["v_gene"], 0) + float(r["read_count"] or 0)
         total = sum(counts.values())
         return {g: c / total for g, c in counts.items()} if total else {}
 
-    def counts_by_aa(tool, chain=None):
+    def fractions_by_aa(tool, chain=None):
+        """Sum clone_fraction per CDR3aa (dimensionless, per-chain normalized)."""
         c = {}
         for r in by_tool.get(tool, []):
-            if (r["cdr3_aa"] and r["read_count"]
+            if (is_productive_cdr3(r)
                     and (chain is None or r["chain"] == chain)):
-                c[r["cdr3_aa"]] = c.get(r["cdr3_aa"], 0) + float(r["read_count"])
+                try:
+                    frac = float(r.get("clone_fraction") or "")
+                except (TypeError, ValueError):
+                    continue
+                c[r["cdr3_aa"]] = c.get(r["cdr3_aa"], 0.0) + frac
         return c
 
-    # pooled values kept for continuity, clearly labelled
+    # pooled V-gene Spearman kept for continuity; it is Ig-dominated by design
     um, ut = usage("mixcr"), usage("trust4")
     genes = sorted(set(um) & set(ut))
     if len(genes) >= 5:
         out["spearman_vgene_pooled"] = pearson(rank([um[g] for g in genes]),
                                               rank([ut[g] for g in genes]))
-    cm, ct = counts_by_aa("mixcr"), counts_by_aa("trust4")
-    shared = sorted(set(cm) & set(ct))
-    if len(shared) >= 5:
-        out["pearson_logreads_pooled"] = pearson(
-            [math.log10(cm[a] + 1) for a in shared],
-            [math.log10(ct[a] + 1) for a in shared])
 
     chains = sorted({r["chain"] for r in actual if r["chain"]})
     for chain in chains:
-        rows_m = [r for r in by_tool.get("mixcr", []) if r["chain"] == chain and r["cdr3_aa"]]
-        rows_t = [r for r in by_tool.get("trust4", []) if r["chain"] == chain and r["cdr3_aa"]]
+        rows_m = [r for r in by_tool.get("mixcr", [])
+                  if r["chain"] == chain and is_productive_cdr3(r)]
+        rows_t = [r for r in by_tool.get("trust4", [])
+                  if r["chain"] == chain and is_productive_cdr3(r)]
         if not rows_m or not rows_t:
             continue
         rows_m.sort(key=lambda r: -float(r["read_count"] or 0))
@@ -308,12 +334,12 @@ def cross_tool(actual):
         if len(g) >= 5:
             out[f"spearman_vgene_{chain}"] = pearson(rank([um_c[x] for x in g]),
                                                     rank([ut_c[x] for x in g]))
-        cm_c, ct_c = counts_by_aa("mixcr", chain), counts_by_aa("trust4", chain)
-        sh = sorted(set(cm_c) & set(ct_c))
+        fm_c, ft_c = fractions_by_aa("mixcr", chain), fractions_by_aa("trust4", chain)
+        sh = sorted(set(fm_c) & set(ft_c))
         if len(sh) >= 5:
-            out[f"pearson_logreads_{chain}"] = pearson(
-                [math.log10(cm_c[x] + 1) for x in sh],
-                [math.log10(ct_c[x] + 1) for x in sh])
+            out[f"pearson_logfraction_{chain}"] = pearson(
+                [math.log10(fm_c[x] + 1e-12) for x in sh],
+                [math.log10(ft_c[x] + 1e-12) for x in sh])
             out[f"n_cdr3_shared_{chain}"] = len(sh)
     return out
 

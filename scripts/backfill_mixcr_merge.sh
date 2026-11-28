@@ -35,7 +35,17 @@ barcode=$(basename "$(ls "$DIR"/*.mixcr.qc.json 2>/dev/null | head -1)" .mixcr.q
 [ -n "$barcode" ] || { echo "REFUSE: no *.mixcr.qc.json — analyze never produced its report"; exit 3; }
 [ "${#parts[@]}" -gt 0 ] || { echo "REFUSE: no *.clones_*.tsv — zero-clonotype sample, use the rule itself"; exit 3; }
 [ -s "$DIR/$barcode.mixcr.readinfo.tsv" ] || { echo "REFUSE: readinfo empty/missing"; exit 3; }
+# The sentinel this script writes claims "genomic-only". Verify that from the
+# align report's inputFiles instead of trusting the call site: a pre-cutover
+# sample would have aligned a samtools-merged BAM and must not be relabelled.
+report=$DIR/$barcode.mixcr.align.report.json
+bam_input=$(grep -o '"[^"]*\.bam"' "$report" 2>/dev/null | head -1)
+case "$bam_input" in
+  "") echo "REFUSE: cannot verify the align input from $report"; exit 6 ;;
+  *merged*|*chimeric*) echo "REFUSE: align input is not genomic-only ($bam_input)"; exit 6 ;;
+esac
 echo "sample      : $barcode"
+echo "align input : $bam_input (genomic-only)"
 echo "chain tables: ${#parts[@]} -> $(for p in "${parts[@]}"; do printf '%s ' "${p##*.clones_}"; done)"
 if [ -n "$clones" ]; then
   echo "NOTE: $clones already exists ($(wc -l < "$clones") lines) — it will be rewritten from the per-chain tables"

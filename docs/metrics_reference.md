@@ -39,14 +39,14 @@ technical quality.
 | `total_reads` | MiXCR `align.report` ("Total sequencing reads") | sequenced pairs entering align; primary sequencing-depth covariate |
 | `mixcr_aligned_reads`, `_frac` | MiXCR align report | immune-template-aligned reads (frac stored as fraction of total) |
 | `mixcr_cdr3_reads`, `trust4_cdr3_reads` | sum of clonotype read counts | repertoire captured by each tool (library size #2) |
-| `bam_size_gb` | manifest | raw file size; coarse depth proxy |
+| `bam_size_gb` | manifest `file_size_bytes`, else `stat` of `bam_genomic` (the shard metadata has no size column) | raw file size; coarse depth proxy |
 
 ### Immune content (the recommended filter)
 
 | column | definition | use |
 |---|---|---|
-| `mixcr_cdr3_frac` | `mixcr_cdr3_reads / total_reads` | **immune-content covariate; primary filter**. Suggested floor: `> 1e-5` (≈ clonotypes ≥ 50 in our data) to call a sample "has repertoire". Cross-sample range in test set: 2e-6 (HNSC, "cold") → 1.2e-3 (OV, infiltrated) |
-| `trust4_cdr3_frac` | same, TRUST4 AIRR `consensus_count` sum | TRUST4's de novo capture is template-independent and typically several-fold higher than MiXCR's — the difference itself quantifies template-dependence vs assembly sensitivity |
+| `mixcr_cdr3_frac` | `mixcr_cdr3_reads / total_reads` (both are read pairs) | **immune-content covariate** — do NOT use it as the "has repertoire" filter (superseded 2026-11-17 by §2a: a pooled floor passes samples whose TRB reads are in the single digits). Initial test-set range 2e-6 (HNSC, cold) → 1.2e-3 (OV, infiltrated); the full cohort reaches 9.5e-3, so the test-set upper bound is not a ceiling |
+| `trust4_cdr3_frac` | `trust4_cdr3_reads / (total_reads × 2 for paired-end, × 1 for single-end)`; empty when layout is unknown | TRUST4's de novo capture is template-independent and typically several-fold higher than MiXCR's — the difference itself quantifies template-dependence vs assembly sensitivity. **Do not divide TRUST4 reads by MiXCR pairs**: that inflates the fraction ~2× (fixed 2026-11-27) |
 
 ### Diversity / clonality (per tool)
 
@@ -69,8 +69,9 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 |---|---|
 | `mean_cdr3_nt` | mean CDR3 nucleotide length (QC: framework contamination shortens it) |
 | `sample_type` | barcode field 4 code: 01 primary, 02 recurrent, 03 blood-derived normal, 06 metastatic, 11 solid normal (see `manifests/sample_type_distribution.txt`) |
-| `has_chimeric` | 1 = genomic+chimeric analyzed; 0 = genomic-only (642 samples: UCEC 380, COAD 190, READ 72) — detection-sensitivity covariate |
-| `mixcr_generation` | provenance of the MiXCR table: `current` = produced by the rule definition now in the repository; `pre-cutover` = produced by the earlier local-mode workflow and carried across the cluster-backend cutover with a backfilled sentinel; `unknown` = sentinel absent. Both generations ran the identical MiXCR preset and filters (`rna-seq --species hsa --assemble-longest-contigs`, primary-alignment-only `-F 0x900`); only threading, memory, logging and scratch layout differ. Retain it as a stratification column in mixed analyses |
+| `has_chimeric` | **1 = a chimeric BAM exists on disk** (642 samples: UCEC 380, COAD 190, READ 72). It does NOT mean the chimeric reads were analysed: since C1 (2026-11-17) every sample is processed from the genomic BAM only. Use `chimeric_analyzed` as the processing covariate, not this column |
+| `chimeric_analyzed` | `yes` only for pre-cutover samples with `has_chimeric=1` (the pre-C1 workflow ran `samtools merge genomic+chimeric`); `no` for every current sample. This is the correct detection-sensitivity covariate |
+| `mixcr_generation` | provenance of the MiXCR table: `current` = produced by the rule definition now in the repository; `pre-cutover` = produced by the earlier local-mode workflow and carried across the cluster-backend cutover with a backfilled sentinel; `unknown` = sentinel absent. **The two generations are NOT identical**: pre-cutover samples with `has_chimeric=1` aligned a merged genomic+chimeric BAM; current samples align the genomic BAM only. The preset/filters (`rna-seq --species hsa --assemble-longest-contigs`, primary-alignment-only `-F 0x900`) are shared, but input composition differs — do not pool the generations without stratifying, and never mix archived pre-cutover tables into a current cohort |
 
 ### 原始表的结构事实（2026-11-22 独立复核确认）
 
@@ -92,6 +93,10 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
   分析必须应用同一过滤**，不能直接按行计数。（2026-11-23 修正：原实现只排除
   `*`，会把 `CALPAL_SKLTF` 这类移码克隆算作生产性；回归测试
   `test/sample_metrics_selftest.py`。）
+  **口径差异（2026-11-27）**：`is_productive()` 比 TRUST4 的 `productive=T`
+  更严格；`productive=T` 但 aa 不满足 C…F/W 的行（TCGA-10-0936 6.0%、
+  TCGA-VQ-AA6F 7.4%）会被排除，TRUST4 的 richness 因而系统性偏低——与 AIRR
+  口径对齐时需单独说明。
 - **TRUST4 的 in-frame 判据**：`junction` 是核苷酸且密码子完整（含 IMGT 锚点），
   直接用 `len(junction) % 3 == 0`；**不要按字面剥离首 C / 末 W**——绝大多数行以
   TGT/TGC 密码子开头（BR-8369 中 3,842/3,940 行以 Cys 密码子开头，只有 8 行
@@ -128,7 +133,13 @@ test set: OV 33% IGH (B-rich), HNSC 10% TRB (T-skewed, IGH low).
 | Effective depth for diversity | `mixcr_cdr3_reads` | ≥ 1,000 (rarefaction depth) | VDJtools requires equal depth before comparing diversity |
 | Any cross-sample diversity comparison | `mixcr_clonality_rare` / `mixcr_gini_rare` | use the rarefied columns | raw richness/clonality track sequencing depth (4 orders of magnitude here) |
 | Lineage-specific statements | `mixcr_tcr_*` / `mixcr_bcr_*` | never the pooled `mixcr_clonality` | Ig dominates the pool (>95 % of reads in most samples) |
-| Covariates in every model | `total_reads`, `cdr3_frac`, `has_chimeric`, `read_layout`, `read_length`, `sample_type` | always include | Bolotin 2017 (read length), Thorsson 2018 (layout), review H1/H2 |
+| Covariates in every model | `total_reads`, `cdr3_frac`, `chimeric_analyzed`, `read_layout`, `read_length`, `sample_type` | always include | Bolotin 2017 (read length), Thorsson 2018 (layout), review H1/H2 |
+
+> **2026-11-27**: `mixcr_<chain>_cdr3_reads` / `trust4_<chain>_cdr3_reads`
+> (e.g. `mixcr_IGH_cdr3_reads`, `mixcr_TRB_cdr3_reads`) are now emitted by
+> `sample_metrics.py` and computed on productive rows. Before this fix the
+> columns referenced by this table did not exist, so the thresholds could not
+> be applied.
 
 No literature defines a universal per-sample read floor for unselected bulk
 RNA-seq; the rows marked *provisional* must be replaced by values derived from
@@ -141,8 +152,10 @@ this cohort's own saturation analysis before any publication claim.
   content are orthogonal — 221M reads with 2e-6 content is still "cold").
 - **Do NOT** use raw `total_reads` alone as a size factor: repertoire yield
   is driven by infiltration, not depth.
-- **Sensitivity flag**: analyses mixing `has_chimeric` 0/1 samples should
-  include the flag as a covariate (or exclude the 642).
+- **Sensitivity flag**: analyses mixing generations must use
+  `chimeric_analyzed` (not `has_chimeric`) as the covariate; all current
+  samples are `no`, and mixing archived pre-cutover tables is not valid
+  without stratification.
 - **Comparing clonality across tools**: MiXCR and TRUST4 clonality agree
   directionally but differ in granularity (de novo assembly splits clones);
   use one tool consistently for cross-sample comparisons.
@@ -150,7 +163,9 @@ this cohort's own saturation analysis before any publication claim.
 ### 3a. TCR and BCR are not the same measurement (2026-11-19)
 
 Measured across the first 10 end-to-end samples, `mixcr_TRB` read totals are
-**22–322** while `mixcr_IGH` totals are **13–62,753** — TCRβ is 200–1000× rarer
+**22–322** (the full cohort reaches ~2,192 in high-infiltrated samples; these
+are calibration ranges, not ceilings) while `mixcr_IGH` totals are
+**13–62,753** — TCRβ is 200–1000× rarer
 because it is a signalling receptor at ~1–2 mRNA copies per T cell, whereas
 Ig is the secreted effector of plasma cells, and tumour B cells are often
 clonally expanded. Consequences, to be respected in any downstream design:
@@ -178,6 +193,9 @@ TCR clonality into a clinical regression.
 
 ```bash
 cd $HOME/Projects/TCGA-mixcr
-oxo-flow run qc_metrics.oxoflow -j 4 --provenance   # after tcga-mixcr.oxoflow
-# → qc/sample_metrics.tsv (full cohort: 11,123 rows)
+# --rerun is MANDATORY: the existing output makes the rule skip otherwise, and
+# sample_metrics.py is not part of the rule fingerprint (editing it does not
+# invalidate the completed QC rule).
+oxo-flow run qc_metrics.oxoflow -j 1 --rerun
+# → qc/sample_metrics.tsv (one row per completed sample)
 ```

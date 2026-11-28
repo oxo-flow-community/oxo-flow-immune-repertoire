@@ -21,13 +21,21 @@ What this version changed after the 2026-11-17 scientific review:
   the table is reproducible.
 * **read length / layout and count unit** (H2/H10): TCGA mixes 76 bp
   single-end and 48 bp paired-end libraries, and extractability depends on
-  both [SRC:bolotin2017]; MiXCR counts pairs while TRUST4 counts fragments, so
-  a `count_unit` column travels with the numbers.
+  both [SRC:bolotin2017]; MiXCR counts pairs while TRUST4 counts reads, so
+  `mixcr_count_unit`/`trust4_count_unit` travel with the numbers.
+* **chain-specific productive reads** (2026-11-27 review): `*_IGH_cdr3_reads`
+  etc. expose the per-chain read floors that the authoritative "has
+  repertoire" thresholds (§2a) require; they are computed on productive rows,
+  unlike the read-weighted `frac_*` columns.
+* **trust4_cdr3_frac** uses a read denominator (MiXCR total pairs x2 for PE)
+  rather than dividing TRUST4 reads by MiXCR pairs, which would inflate it.
 * **generation from the sentinel** (H3): the sentinel written by the current
   rule carries its parameters ("mixcr-v2 genomic-only threads=4 xmx=40g");
   older sentinels are labelled `legacy` instead of being called current.
-* **has_chimeric from metadata** (H1): read from the shard `metadata.tsv`
-  when given, because `manifests/all_samples.tsv` has no such column.
+* **has_chimeric / chimeric_analyzed** (H1): `has_chimeric` only says the
+  chimeric BAM exists. `chimeric_analyzed` is the processing covariate: yes
+  only for pre-cutover samples with has_chimeric=1 (the C1 fix dropped the
+  chimeric merge; current samples all read the genomic BAM only).
 
 Stdlib only.
 """
@@ -52,6 +60,52 @@ def safe_float(x, default=0.0):
         return float(x)
     except (TypeError, ValueError):
         return default
+
+
+def count_unit_for_layout(layout):
+    """Unified-table unit for a MiXCR sample: pairs on PE, reads on SE.
+
+    Must match standardize_clonotypes.py's count_unit so the QC table and the
+    unified table never disagree.
+    """
+    return "read_pair" if layout == "paired-end" else "read" if layout == "single-end" else ""
+
+
+def cdr3_fraction(reads, total_reads, layout):
+    """TRUST4 CDR3 reads as a fraction of sequencing reads.
+
+    `total_reads` is MiXCR's totalReadsProcessed, which counts read PAIRS;
+    TRUST4's consensus_count counts reads. Convert the denominator by the
+    library layout (x2 for paired-end, x1 for single-end) rather than dividing
+    reads by pairs (which would inflate the fraction ~2x). Empty when the
+    layout is unknown — a wrong denominator is worse than a missing value.
+    """
+    if reads == "" or not total_reads:
+        return ""
+    if layout == "paired-end":
+        denom = total_reads * 2
+    elif layout == "single-end":
+        denom = total_reads
+    else:
+        return ""
+    return round(safe_float(reads) / denom, 10)
+
+
+def bam_size_gb(row):
+    """file_size_bytes from the manifest, else stat the BAM itself.
+
+    The shard metadata.tsv intentionally omits file_size_bytes; it does carry
+    the BAM path. A stat over the local/NFS mount is one syscall per sample.
+    """
+    if row.get("file_size_bytes"):
+        return round(safe_float(row["file_size_bytes"]) / 1e9, 2)
+    path = row.get("bam_genomic") or ""
+    if path:
+        try:
+            return round(os.stat(path).st_size / 1e9, 2)
+        except OSError:
+            return ""
+    return ""
 
 
 def gini(counts):
@@ -147,7 +201,8 @@ def tool_block(rows, depth):
         "rarefied", "tcr_clonotypes", "tcr_cdr3_reads", "tcr_clonality",
         "tcr_gini", "tcr_top_clone_frac", "bcr_clonotypes", "bcr_cdr3_reads",
         "bcr_clonality", "bcr_gini", "bcr_top_clone_frac",
-        *[f"frac_{c}" for c in CHAIN_ORDER])}
+        *[f"frac_{c}" for c in CHAIN_ORDER],
+        *[f"{c}_cdr3_reads" for c in CHAIN_ORDER])}
     if not rows:
         return empty
 
@@ -186,6 +241,15 @@ def tool_block(rows, depth):
     total = sum(all_counts)
     for c in CHAIN_ORDER:
         block[f"frac_{c}"] = round(per_chain.get(c, 0) / total, 4) if total else 0.0
+
+    # Chain-specific productive reads: the authoritative "has repertoire"
+    # thresholds (docs/metrics_reference.md §2a) are per chain, and the
+    # read-weighted *_frac columns above include non-productive rows.
+    per_chain_prod = defaultdict(int)
+    for r in productive:
+        per_chain_prod[r.get("chain", "")] += max(1, int(safe_float(r.get("read_count"), 0)))
+    for c in CHAIN_ORDER:
+        block[f"{c}_cdr3_reads"] = per_chain_prod.get(c, 0)
     return block
 
 
@@ -294,23 +358,24 @@ def main():
         mx = tool_block(tools.get("mixcr", []), args.rarefy_depth)
         tr = tool_block(tools.get("trust4", []), args.rarefy_depth)
         read_len, read_layout = read_info(d, bc)
+        generation = generation_of(d, bc)
         row = {
             "sample_id": uuid,
             "barcode_28": bc,
             "cancer_type": r["cancer_type"],
             "sample_type": bc.split("-")[3][:2],
             "has_chimeric": r.get("has_chimeric", ""),
+            "chimeric_analyzed": ("yes" if generation == "pre-cutover"
+                                  and r.get("has_chimeric") == "1" else "no"),
             "read_length": read_len,
             "read_layout": read_layout,
-            "bam_size_gb": (round(safe_float(r["file_size_bytes"]) / 1e9, 2)
-                            if r.get("file_size_bytes") else ""),
-            "mixcr_generation": generation_of(d, bc),
+            "bam_size_gb": bam_size_gb(r),
+            "mixcr_generation": generation,
             "total_reads": mixcr_total_reads(os.path.join(d, f"{bc}.mixcr.align.report.json")),
             "mixcr_aligned_reads": "",
             "mixcr_aligned_frac": "",
-            "mixcr_count_unit": ("pair" if read_layout == "paired-end" else
-                                 "read" if read_layout == "single-end" else ""),
-            "trust4_count_unit": "fragment",
+            "mixcr_count_unit": count_unit_for_layout(read_layout),
+            "trust4_count_unit": "read",
             "rarefy_depth": args.rarefy_depth,
         }
         txt = os.path.join(d, f"{bc}.mixcr.align.report.txt")
@@ -333,6 +398,8 @@ def main():
             if row["total_reads"] and mx.get("cdr3_reads") != "" else "")
         for k, v in tr.items():
             row[f"trust4_{k}"] = v
+        row["trust4_cdr3_frac"] = cdr3_fraction(
+            tr.get("cdr3_reads", ""), row["total_reads"], read_layout)
         out_rows.append(row)
 
     if not out_rows:

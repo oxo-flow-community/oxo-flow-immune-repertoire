@@ -12,11 +12,11 @@ to be reusable: any site with Slurm + a reference genome can run it.
 ## What it does
 
 ```
-BAM (genomic [+ chimeric])
+BAM (genomic only since C1, 2026-11-17)
    │
    ├── mixcr        MiXCR rna-seq preset → per-chain clones merged into one table
    ├── trust4       TRUST4 de novo assembly → AIRR table
-   ├── standardize  both tools → one 14-column unified schema (per-chain fractions)
+   ├── standardize  both tools → one 15-column unified schema (per-chain fractions)
    └── cleanup      integrity check + scratch reclamation
 ```
 
@@ -27,11 +27,13 @@ Per-sample outputs (`results/{cancer}/{barcode_12}/{sample_uuid}/`):
 | `<barcode>.mixcr.clones.tsv` | MiXCR clones, all chains, `chain` column appended |
 | `<barcode>.mixcr.qc.json` | MiXCR QC report (`[]` for zero-clonotype samples) |
 | `<barcode>.trust4_airr.tsv` / `_cdr3.out` / `_report.tsv` | TRUST4 AIRR + native outputs |
-| `<barcode>.unified.tsv` | 14-column unified clonotype table (MiXCR + TRUST4) |
+| `<barcode>.unified.tsv` | 15-column unified clonotype table (MiXCR + TRUST4) |
 | `<barcode>.*.done` | per-rule completion sentinels (see "Crash safety") |
 
-Aggregate metrics: `oxo-flow run qc_metrics.oxoflow` → `qc/sample_metrics.tsv`
-(~40 columns per sample; column dictionary in `docs/metrics_reference.md`).
+Aggregate metrics: `oxo-flow run qc_metrics.oxoflow --rerun` →
+`qc/sample_metrics.tsv` (~70+ columns per sample; column dictionary in
+`docs/metrics_reference.md`). `--rerun` is required after new samples complete
+or after changing `scripts/sample_metrics.py`.
 
 ## Requirements
 

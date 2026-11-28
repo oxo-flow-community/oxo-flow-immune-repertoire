@@ -1,5 +1,10 @@
 # Phase 4 Validation Report — TCGA-mixcr pipeline (test set: 8 samples)
 
+> **历史报告（2026-11-27 标注）**：本文描述 C1 之前的行为（`has_chimeric=1`
+> 会 `samtools merge` 合并 chimeric BAM；TRUST4 的 `trust_cdr3.out` 按 8 列
+> 解析）。当前流水线自 C1（2026-11-17）起只读 genomic BAM，统一表 15 列，
+> TRUST4 解析 `*_airr.tsv`。本文数字与格式仅作历史对照，不是当前实现规范。
+
 > Status: IN PROGRESS — this report is completed when the full 8-sample run
 > finishes and cross-method validation numbers are in. Numbers quoted below
 > are filled by `scripts/run_validation.sh` + independent verification.

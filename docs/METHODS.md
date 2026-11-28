@@ -205,7 +205,9 @@ complete input.
 - **V gene usage correlation**: Spearman ρ
   - Expected: > 0.7 (tools assign same V genes at similar frequencies)
 
-- **Read count correlation**: Pearson r on log-transformed per-clone counts
+- **Clonotype abundance correlation**: Pearson r on log `clone_fraction`, per
+  chain (read counts are not comparable across tools: pair vs read, and the
+  ratio is locus-dependent)
   - Expected: > 0.7 (tools quantify clonotypes similarly)
 
 **Interpretation**:
@@ -285,13 +287,16 @@ Both tools output different formats. Standardize to:
 | `cdr3_nt` | string | Nucleotide sequence |
 | `cdr3_aa` | string | Amino acid sequence |
 | `v_gene` | string | IMGT gene name |
-| `d_gene` | string | IMGT gene name (or empty) |
 | `j_gene` | string | IMGT gene name |
 | `c_gene` | string | Constant region (or empty) |
-| `read_count` | int | Supporting reads — **unit differs by tool, see `count_unit`** |
-| `clone_fraction` | float | Fraction of that (sample, tool, chain) read pool; sums to 1 per chain |
-| `clone_count` | int | Legacy MiXCR alias of `read_count`; TRUST4 rows reuse the same number |
-| `count_unit` | string | `read_pair` for MiXCR, `read` for TRUST4 |
+| `read_count` | int | Supporting reads — **unit differs by tool/sample, see `count_unit`** |
+| `clone_fraction` | float | Fraction of that (sample, tool, chain) read pool; recomputed from `read_count`, sums to 1 per chain |
+| `clone_count` | int | Legacy MiXCR 3.x alias of `read_count`; TRUST4 rows reuse the same number |
+| `count_unit` | string | MiXCR: `read_pair` (paired-end) or `read` (single-end), from `readinfo.tsv`; TRUST4: `read` |
+
+The table is **15 columns**; `d_gene` is not emitted (the pipeline keeps
+V/J/C only). The parser accepts MiXCR 4.x `readCount`/`readFraction` and 3.x
+`cloneCount`/`cloneFraction`; `readCount` is a float string (e.g. `1356.0`).
 
 **`read_count` is NOT comparable across tools** (verified 2026-11-18 on
 TCGA-13-0886). MiXCR's `readCount` counts read **pairs** — its total 31,212
@@ -303,27 +308,30 @@ across the two tools; use `clone_fraction`, or restrict to one tool.
 
 ### 7.2 MiXCR to Unified
 
-MiXCR `.clones.tsv` columns (selected):
-- `cloneCount` → `clone_count`
-- `cloneFraction` → `clone_fraction`
-- `nSeqCDR3` → `cdr3_nt`
-- `aaSeqCDR3` → `cdr3_aa`
-- `vGene` → `v_gene`
-- `jGene` → `j_gene`
-- `cGene` → `c_gene` (if present)
+MiXCR `.clones.tsv` columns used:
+- `readCount` (4.x) or `cloneCount` (3.x) → `read_count` / `clone_count`
+- `nSeqCDR3` → `cdr3_nt`; `aaSeqCDR3` → `cdr3_aa`
+- `allVHitsWithScore` / `allJHitsWithScore` / `allCHitsWithScore` → first hit,
+  allele suffix stripped → `v_gene` / `j_gene` / `c_gene`
+- `chain` (appended by the merge) or inferred from the V/J prefix
+- `readFraction` is per chain and is NOT copied: `clone_fraction` is recomputed
+  from `read_count` per (tool, chain), so the two tools carry the same column.
 
 ### 7.3 TRUST4 to Unified
 
-TRUST4 `trust_cdr3.out` columns:
-- Column 1: consensus_id (ignore)
-- Column 2: chain_type → `chain` (map: `TRA`, `TRB`, `IGH`, `IGK`, `IGL`)
-- Column 3: CDR3_AminoAcid → `cdr3_aa`
-- Column 4: VGene → `v_gene`
-- Column 5: JGene → `j_gene`
-- Column 6: ConstantGene → `c_gene`
-- Column 7: Abundance → `read_count` (note: TRUST4 abundance is relative weight, not raw reads)
-
-**Note**: TRUST4 does not output nucleotide CDR3 directly in `trust_cdr3.out`. Extract from `trust_annot.fa` or re-translate from `trust_final.out`.
+The pipeline parses TRUST4's **`*_airr.tsv`** (AIRR schema), not
+`trust_cdr3.out`:
+- `locus` → `chain`; `junction` → `cdr3_nt` (IMGT anchors included);
+  `junction_aa` → `cdr3_aa`; `consensus_count` → `read_count` / `clone_count`
+- `v_call`/`j_call`/`c_call` → genes (allele suffix stripped)
+- `trust_cdr3.out` from v1.1.5 has **13 columns with a leading contig id**
+  (e.g. `assemble0`), so positional 7/8-column parsing is unsafe.
+- `consensus_count` is TRUST4's native integer read count (it equals the
+  `#count` column of `trust_report.tsv`), **not a relative weight**.
+  Counts are still not comparable to MiXCR's read pairs (see §7.1).
+- `productive=F` rows are retained (their nucleotide junction is still usable
+  for nucleotide-level analyses); `cdr3_aa` may be empty for those rows. Do
+  not count them as productive clones.
 
 ---
 

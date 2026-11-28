@@ -3,9 +3,12 @@
 MiXCR vs TRUST4 on the unified clonotype table (or the two raw outputs).
 
 Metrics (PLAN.md §4.4):
-  1. top-100 CDR3aa Jaccard similarity            (pass > 0.5)
-  2. V-gene usage Spearman rank correlation        (reported)
-  3. per-clone read-count Pearson r (log10, matched by CDR3aa) (pass > 0.7)
+  1. top-100 CDR3aa Jaccard similarity                     (pass > 0.5)
+  2. V-gene usage Spearman rank correlation                 (reported)
+  3. per-clone clone_fraction Pearson r (log10, matched by CDR3aa, per chain)
+     (pass > 0.7). Read counts are NOT comparable across tools: MiXCR counts
+     read pairs, TRUST4 counts reads, and the ratio is locus-dependent. The
+     per-chain clone_fraction is dimensionless and is the valid quantity.
 
 Stdlib only (no numpy/scipy): ranks and Pearson implemented directly.
 """
@@ -13,6 +16,7 @@ import argparse
 import csv
 import math
 import re
+import statistics
 import sys
 from collections import Counter
 
@@ -110,14 +114,26 @@ def spearman(a_counter, b_counter):
     return pearson(ranks(xs), ranks(ys))
 
 
-def read_count_map(rows):
+def fraction_map(rows):
+    """Sum clone_fraction per CDR3aa (per-chain normalized, dimensionless)."""
     m = {}
     for r in rows:
         aa = r.get("cdr3_aa", "")
         if not is_complete_cdr3(aa):
             continue
-        m[aa] = m.get(aa, 0.0) + float(r.get("read_count") or 0)
+        try:
+            frac = float(r.get("clone_fraction") or "")
+        except (TypeError, ValueError):
+            continue
+        m[aa] = m.get(aa, 0.0) + frac
     return m
+
+
+def by_chain(rows):
+    d = {}
+    for r in rows:
+        d.setdefault(r.get("chain", ""), []).append(r)
+    return d
 
 
 def main():
@@ -136,22 +152,29 @@ def main():
     jac = jaccard(top_cdr3aa(mx, args.topn), top_cdr3aa(tr, args.topn))
     v_rho = spearman(v_gene_usage(mx), v_gene_usage(tr))
 
-    mx_rc, tr_rc = read_count_map(mx), read_count_map(tr)
-    common = sorted(set(mx_rc) & set(tr_rc))
-    if len(common) >= 2:
-        xs = [math.log10(mx_rc[c] + 1) for c in common]
-        ys = [math.log10(tr_rc[c] + 1) for c in common]
-        rc_r = pearson(xs, ys)
-    else:
-        rc_r = 0.0
+    common = sorted(set(fraction_map(mx)) & set(fraction_map(tr)))
+    per_chain = []
+    mx_chains, tr_chains = by_chain(mx), by_chain(tr)
+    for chain in sorted(set(mx_chains) & set(tr_chains)):
+        fm = fraction_map(mx_chains[chain])
+        ft = fraction_map(tr_chains[chain])
+        shared = sorted(set(fm) & set(ft))
+        if len(shared) >= 2:
+            per_chain.append((chain, len(shared), pearson(
+                [math.log10(fm[c] + 1e-12) for c in shared],
+                [math.log10(ft[c] + 1e-12) for c in shared])))
+    frac_r = statistics.median([r for _, _, r in per_chain]) if per_chain else 0.0
 
     verdict_j = "PASS" if jac > 0.5 else "FAIL"
-    verdict_r = "PASS" if rc_r > 0.7 else "FAIL"
+    verdict_r = "PASS" if frac_r > 0.7 else "FAIL"
     print(f"sample: {args.unified}")
     print(f"clonotypes: mixcr={len(mx)} trust4={len(tr)} common_cdr3aa={len(common)}")
     print(f"top{args.topn}_cdr3aa_jaccard: {jac:.4f}  ({verdict_j}, threshold 0.5)")
     print(f"v_gene_usage_spearman:       {v_rho:.4f}")
-    print(f"log10_readcount_pearson:     {rc_r:.4f}  ({verdict_r}, threshold 0.7, n={len(common)})")
+    print(f"clone_fraction_pearson_median: {frac_r:.4f}  "
+          f"({verdict_r}, threshold 0.7, chains={len(per_chain)})")
+    for chain, n, r in per_chain:
+        print(f"  {chain}: n={n} r={r:.4f}")
 
 
 if __name__ == "__main__":

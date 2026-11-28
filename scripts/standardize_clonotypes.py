@@ -22,10 +22,16 @@ clone_count is the legacy MiXCR 3.x alias of readCount (MiXCR 4.x renamed
 readCount/cloneCount), carried for compatibility with pre-4.x consumers; it
 duplicates read_count by design. TRUST4 rows use consensus_count for both.
 
+count_unit is resolved per sample for MiXCR from the readinfo file written by
+the mixcr rule (paired-end -> read_pair, single-end -> read); TRUST4 always
+counts reads. The output is written to a temp file and renamed into place, so
+a failed re-run leaves the previous table intact.
+
 Stdlib only — runs in the project pixi env.
 """
 import argparse
 import csv
+import os
 import re
 import sys
 
@@ -52,8 +58,34 @@ COLUMNS = [
 # of the apparent discrepancy IS the unit difference, not a disagreement.
 # Never sum or compare read_count across tools; count_unit says so in-band.
 # A fixed x2 conversion is NOT applied here because MiXCR's unit is one read
-# for single-end libraries — the multiplier depends on read_layout.
+# for single-end libraries — the multiplier depends on read_layout, which the
+# mixcr rule writes to {barcode}.mixcr.readinfo.tsv (column 3). The unit is
+# therefore resolved per sample; `read_pair` is the safe default when the
+# readinfo file is missing (all 400 instances completed by 2026-11-27 were
+# paired-end).
 COUNT_UNIT = {"mixcr": "read_pair", "trust4": "read"}
+
+
+def count_unit_for_layout(layout: str) -> str:
+    """MiXCR counts pairs on paired-end libraries and reads on single-end."""
+    return "read" if (layout or "").strip().lower() == "single-end" else "read_pair"
+
+
+def read_layout(mixcr_path: str, barcode: str) -> str:
+    """Read the layout column written by the mixcr rule (readinfo.tsv).
+
+    The QC table reads the same file; keeping the two in sync means the
+    unified `count_unit` always matches the QC `read_layout` column.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(mixcr_path)),
+                        f"{barcode}.mixcr.readinfo.tsv")
+    try:
+        with open(path, newline="") as f:
+            row = next(csv.reader(f, delimiter="\t"))
+        return row[2].strip().lower()
+    except (OSError, StopIteration, IndexError):
+        return ""
+
 
 V_PREFIX_TO_CHAIN = {
     "TRAV": "TRA", "TRBV": "TRB", "TRGV": "TRG", "TRDV": "TRD",
@@ -98,7 +130,7 @@ def first_hit(field: str) -> str:
     return first.split("(")[0].strip()
 
 
-def parse_mixcr(path, barcode, cancer):
+def parse_mixcr(path, barcode, cancer, count_unit=COUNT_UNIT["mixcr"]):
     rows = []
     with open(path, newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
@@ -132,7 +164,7 @@ def parse_mixcr(path, barcode, cancer):
                 "read_count": safe_int(r.get("readCount") or r.get("cloneCount") or ""),
                 "clone_fraction": "",
                 "clone_count": safe_int(r.get("readCount") or r.get("cloneCount") or ""),
-                "count_unit": COUNT_UNIT["mixcr"],
+                "count_unit": count_unit,
             })
     return rows
 
@@ -172,18 +204,23 @@ def parse_trust4_airr(path, barcode, cancer):
                 "c_gene": c,
                 "read_count": safe_int(count),
                 "clone_fraction": "",
-                "clone_count": count,
+                "clone_count": safe_int(count),
                 "count_unit": COUNT_UNIT["trust4"],
             })
     return rows
 
 
 def safe_int(x):
-    """Normalize numeric-looking counts to int ('4472.0' -> 4472); passthrough otherwise."""
+    """Normalize numeric-looking counts to int ('4472.0' -> 4472); passthrough otherwise.
+
+    OverflowError covers 'inf' (float('inf') raises on int()); NaN raises
+    ValueError. Both are passed through unchanged rather than crashing the
+    whole sample.
+    """
     try:
         f = float(x)
         return int(f) if f == int(f) else f
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return x
 
 
@@ -221,18 +258,31 @@ def main():
     if not re.match(r"^TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3}-[A-Z0-9]{4}-[A-Z0-9]{2}$", args.barcode):
         print(f"WARNING: barcode {args.barcode} does not match TCGA 28-char format", file=sys.stderr)
 
-    rows = parse_mixcr(args.mixcr, args.barcode, args.cancer)
+    layout = read_layout(args.mixcr, args.barcode)
+    mixcr_unit = count_unit_for_layout(layout)
+    rows = parse_mixcr(args.mixcr, args.barcode, args.cancer, mixcr_unit)
     rows += parse_trust4_airr(args.trust4_airr, args.barcode, args.cancer)
     rows = assign_chain_fractions(rows)
 
-    with open(args.output, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS, delimiter="\t", lineterminator="\n")
-        w.writeheader()
-        w.writerows(rows)
+    # Write then rename: a crash mid-write must never leave a truncated
+    # unified.tsv under the previous run's still-present sentinel. The cluster
+    # backend does not roll back failed outputs (unlike the local executor).
+    tmp = f"{args.output}.tmp.{os.getpid()}"
+    try:
+        with open(tmp, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=COLUMNS, delimiter="\t", lineterminator="\n")
+            w.writeheader()
+            w.writerows(rows)
+        os.replace(tmp, args.output)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
     n_mixcr = sum(1 for r in rows if r["tool"] == "mixcr")
     n_trust4 = sum(1 for r in rows if r["tool"] == "trust4")
-    print(f"wrote {args.output}: {len(rows)} rows (mixcr={n_mixcr}, trust4={n_trust4})")
+    print(f"wrote {args.output}: {len(rows)} rows (mixcr={n_mixcr}, trust4={n_trust4}; "
+          f"count_unit: mixcr={mixcr_unit}, trust4={COUNT_UNIT['trust4']}; "
+          f"layout={layout or 'unknown'})")
 
 
 if __name__ == "__main__":
